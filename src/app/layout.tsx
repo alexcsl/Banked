@@ -1,5 +1,10 @@
 import type { Metadata } from "next";
+import { Lexend, Source_Sans_3 } from "next/font/google";
 import "./globals.css";
+import "./workspace.css";
+
+const display = Lexend({ subsets: ["latin"], variable: "--font-display" });
+const body = Source_Sans_3({ subsets: ["latin"], variable: "--font-body" });
 
 export const metadata: Metadata = {
   title: "Banked",
@@ -7,5 +12,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body>{children}</body></html>;
+  return <html lang="en"><body className={`${display.variable} ${body.variable}`}>{children}</body></html>;
 }
