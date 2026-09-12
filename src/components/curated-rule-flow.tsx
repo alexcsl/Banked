@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { VersionedTransaction } from "@solana/web3.js";
 import { allocateRuleProceeds, formatAtomic, parseDecimalToAtomic } from "@/domain/allocation";
 import { getPurchaseAsset, type PurchaseDestinationId } from "@/domain/assets";
-import { createExitRule, createRuleOperation, reconcileRuleSale, updatePurchase, type ExitRule, type RuleOperation } from "@/domain/rules";
+import { createExitRule, createRuleOperation, exitRuleTemplates, reconcileRuleSale, summarizeRuleOperations, updatePurchase, type ExitRule, type RuleOperation } from "@/domain/rules";
 import { deleteRule, loadRuleOperations, loadRules, saveRule, saveRuleOperation } from "@/storage/operations";
 
 type Quote = { destinationId: PurchaseDestinationId; expectedOutput: string; minimumOutput: string; feeBps: number; route: string };
@@ -47,6 +47,7 @@ export function CuratedRuleFlow() {
   }, [saleAmount]);
   const formAllocation = useMemo(() => allocateRuleProceeds(fixtureProceeds, { spyxBps, jupBps }), [fixtureProceeds, spyxBps, jupBps]);
   const activeAllocation = useMemo(() => operation?.actualProceeds ? allocateRuleProceeds(BigInt(operation.actualProceeds), { spyxBps: operation.rule.spyxBps, jupBps: operation.rule.jupBps }) : formAllocation, [formAllocation, operation]);
+  const discipline = useMemo(() => summarizeRuleOperations(history), [history]);
 
   function persistOperation(next: RuleOperation) {
     saveRuleOperation(next);
@@ -89,6 +90,13 @@ export function CuratedRuleFlow() {
     setSpyxBps(rule.spyxBps);
     setJupBps(rule.jupBps);
     setMessage(`Loaded ${rule.name}.`);
+  }
+
+  function applyTemplate(template: (typeof exitRuleTemplates)[number]) {
+    setRuleName(template.name);
+    setSpyxBps(template.spyxBps);
+    setJupBps(template.jupBps);
+    setMessage(`${template.name} loaded. Adjust it before saving or preparing a sale.`);
   }
 
   function duplicateRule(rule: ExitRule) {
@@ -276,10 +284,12 @@ export function CuratedRuleFlow() {
       <ReceiptCard label="JUP BUDGET" amount={activeAllocation.jup.budget} detail={activeAllocation.jup.eligible ? "Eligible for purchase" : "Skipped below 10 USDC"} />
       <ReceiptCard label="RETAINED USDC" amount={activeAllocation.retainedUsdc} detail="Always spendable in your wallet" />
     </section>
+    <section className="template-grid">{exitRuleTemplates.map((template) => <article className="panel template-card" key={template.id}><p className="eyebrow">RULE TEMPLATE</p><h2>{template.name}</h2><p>{template.description}</p><span>{template.spyxBps}% SPYx · {template.jupBps}% JUP · {100 - template.spyxBps - template.jupBps}% USDC</span><button className="secondary" onClick={() => applyTemplate(template)}>Use template</button></article>)}</section>
+    <section className="panel dashboard"><div><p className="eyebrow">EXIT DISCIPLINE</p><h2>Did you follow your rule?</h2><p>Completed rules require every eligible destination to finalize. Pending purchases remain recoverable and do not lock retained USDC.</p></div><div className="dashboard-metrics"><Metric label="Rules followed" value={`${discipline.completedRules}/${discipline.totalRules}`} /><Metric label="Pending purchases" value={discipline.pendingPurchases.toString()} /><Metric label="Retained across exits" value={`${formatAtomic(discipline.retainedUsdc, 6, 4)} USDC`} /></div></section>
     <section className="panel review"><div><p className="eyebrow">SALE STAGE</p><h2>Record actual proceeds before purchases</h2><p>Fixture mode records synthetic proceeds. Live mode prepares a wallet-bound Jupiter transaction, which you review and sign in Phantom.</p></div><div className="actions compact">{mode === "fixture" ? <button onClick={recordFixtureSale}>Record fixture sale</button> : <><button className="secondary" onClick={prepareLiveSale}>Prepare live sale</button>{preparedSale && operation?.saleStatus === "prepared" && <button onClick={signAndSubmitSale}>Sign and submit sale</button>}</>}</div></section>
     {operation?.saleStatus === "finalized" && <section className="purchase-grid">{(["spyx", "jup"] as PurchaseDestinationId[]).map((destinationId) => <PurchaseCard key={destinationId} destinationId={destinationId} operation={operation} quote={quotes[destinationId]} mode={mode} onQuote={loadQuote} onFixture={recordFixturePurchase} onPrepare={preparePurchase} onSign={signAndSubmitPurchase} prepared={Boolean(preparedPurchases[destinationId])} />)}</section>}
     {operation && <section className="panel receipt-actions"><div><p className="eyebrow">RULE RECEIPT</p><h2>{operation.rule.name}</h2><p>Planned split: {operation.rule.spyxBps}% SPYx, {operation.rule.jupBps}% JUP, {100 - operation.rule.spyxBps - operation.rule.jupBps}% retained USDC.</p></div><div className="actions compact"><button className="secondary" onClick={copyReceipt}>Copy receipt</button><button className="secondary" onClick={downloadReceipt}>Download JSON</button></div></section>}
-    <section className="panel history"><p className="eyebrow">SAVED RULES</p>{rules.length ? rules.map((rule) => <div className="history-row" key={rule.id}><span>{rule.name} · {rule.spyxBps}% SPYx / {rule.jupBps}% JUP</span><div><button className="text-button" onClick={() => selectRule(rule)}>Load</button><button className="text-button" onClick={() => duplicateRule(rule)}>Duplicate</button><button className="text-button" onClick={() => { deleteRule(rule.id); setRules(loadRules()); }}>Delete</button></div></div>) : <p>No saved rules yet.</p>}<p className="eyebrow history-label">RECENT OPERATIONS</p>{history.length ? history.map((item) => <div className="history-row" key={item.id}><span>{item.rule.name}</span><span>{item.saleStatus} · {item.actualProceeds ? `${formatAtomic(BigInt(item.actualProceeds), 6, 4)} USDC` : "Awaiting proceeds"}</span></div>) : <p>No operations yet.</p>}</section>
+    <section className="panel history"><p className="eyebrow">SAVED RULES</p>{rules.length ? rules.map((rule) => <div className="history-row" key={rule.id}><span>{rule.name} · {rule.spyxBps}% SPYx / {rule.jupBps}% JUP</span><div><button className="text-button" onClick={() => selectRule(rule)}>Load</button><button className="text-button" onClick={() => duplicateRule(rule)}>Duplicate</button><button className="text-button" onClick={() => { deleteRule(rule.id); setRules(loadRules()); }}>Delete</button></div></div>) : <p>No saved rules yet.</p>}<p className="eyebrow history-label">RECENT OPERATIONS</p>{history.length ? history.map((item) => <div className="history-row" key={item.id}><span>{item.rule.name}</span><span>{item.saleStatus} · {item.actualProceeds ? `${formatAtomic(BigInt(item.actualProceeds), 6, 4)} USDC` : "Awaiting proceeds"}</span>{item.saleStatus === "finalized" && <button className="text-button" onClick={() => { setOperation(item); setMessage(`${item.rule.name} restored. Continue any ready or pending purchase.`); }}>Resume</button>}</div>) : <p>No operations yet.</p>}</section>
     <p className="status" role="status">{message}</p>
     <section className="disclosure"><h2>Execution boundary</h2><p>Banked records a precommitted rule and prepares exact transactions. It never requests seed phrases, delegated authority, custody transfers, or background wallet access.</p></section>
   </div>;
@@ -292,6 +302,10 @@ function AllocationControl({ id, value, onChange }: { id: PurchaseDestinationId;
 
 function ReceiptCard({ label, amount, detail }: { label: string; amount: bigint; detail: string }) {
   return <article className="panel receipt"><p className="eyebrow">{label}</p><strong>{formatAtomic(amount, 6, 6)} USDC</strong><span>{detail}</span></article>;
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div><span>{label}</span><strong>{value}</strong></div>;
 }
 
 function PurchaseCard({ destinationId, operation, quote, mode, onQuote, onFixture, onPrepare, onSign, prepared }: { destinationId: PurchaseDestinationId; operation: RuleOperation; quote?: Quote; mode: "fixture" | "live"; onQuote: (id: PurchaseDestinationId) => void; onFixture: (id: PurchaseDestinationId) => void; onPrepare: (id: PurchaseDestinationId) => void; onSign: (id: PurchaseDestinationId) => void; prepared: boolean }) {

@@ -31,6 +31,19 @@ export type RuleOperation = {
   updatedAt: string;
 };
 
+export const exitRuleTemplates = [
+  { id: "de-risk-rally", name: "De-risk rally", description: "Move a portion of a SOL exit into SPYx and JUP while retaining dry powder.", spyxBps: 20, jupBps: 20 },
+  { id: "bank-into-stocks", name: "Bank into stocks", description: "Prioritize SPYx exposure after a volatile-token exit.", spyxBps: 50, jupBps: 0 },
+  { id: "keep-dry-powder", name: "Keep dry powder", description: "Make smaller destination purchases and retain most proceeds as USDC.", spyxBps: 10, jupBps: 10 },
+] as const;
+
+export type ExitDisciplineSummary = {
+  totalRules: number;
+  completedRules: number;
+  pendingPurchases: number;
+  retainedUsdc: bigint;
+};
+
 export function createExitRule(name: string, percentages: RulePercentages, now = new Date().toISOString()): ExitRule {
   const trimmedName = name.trim();
   if (!trimmedName) throw new Error("Enter a name for this exit rule.");
@@ -64,4 +77,19 @@ export function reconcileRuleSale(operation: RuleOperation, proceeds: bigint): R
 
 export function updatePurchase(operation: RuleOperation, destinationId: PurchaseDestinationId, changes: Partial<DestinationPurchase>): RuleOperation {
   return { ...operation, purchases: { ...operation.purchases, [destinationId]: { ...operation.purchases[destinationId], ...changes } }, updatedAt: new Date().toISOString() };
+}
+
+export function summarizeRuleOperations(operations: RuleOperation[]): ExitDisciplineSummary {
+  return operations.reduce<ExitDisciplineSummary>((summary, operation) => {
+    if (operation.saleStatus !== "finalized" || !operation.actualProceeds) return summary;
+    const allocation = allocateRuleProceeds(BigInt(operation.actualProceeds), { spyxBps: operation.rule.spyxBps, jupBps: operation.rule.jupBps });
+    const purchases = Object.values(operation.purchases);
+    const completed = purchases.every((purchase) => purchase.status === "finalized" || purchase.status === "skipped");
+    return {
+      totalRules: summary.totalRules + 1,
+      completedRules: summary.completedRules + Number(completed),
+      pendingPurchases: summary.pendingPurchases + purchases.filter((purchase) => !["finalized", "skipped"].includes(purchase.status)).length,
+      retainedUsdc: summary.retainedUsdc + allocation.retainedUsdc,
+    };
+  }, { totalRules: 0, completedRules: 0, pendingPurchases: 0, retainedUsdc: 0n });
 }
