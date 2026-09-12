@@ -1,8 +1,8 @@
 # Banked
 
-Banked is a staged Solana exit-allocation workflow. A user sells through the product, Banked reconciles the actual USDC received, and the user can separately approve an allocation into SPYx.
+Banked is a staged Solana exit-rule workflow. A user sells through the product, Banked reconciles the actual USDC received, and the user can independently approve the rule's curated SPYx and JUP purchases while retaining the unallocated USDC.
 
-The current application ships in fixture mode. It provides the allocation interface, exact integer accounting, a curated SPYx quote path, and a clear recovery model without presenting a mock transaction as live execution.
+The application defaults to fixture mode. It provides named local rules, exact integer accounting, curated SPYx and JUP quote paths, receipt export, and a recovery model without presenting a mock transaction as live execution.
 
 ## Run locally
 
@@ -30,7 +30,7 @@ Live signing is intentionally unavailable until all of the following are proven 
 - Jupiter transaction construction and execution access
 - Full versioned-transaction inspection, including lookup tables and account privileges
 - Reconciliation of the sale's exact USDC token-account delta
-- A purchase whose total USDC debit does not exceed the allocated budget
+- Each purchase whose USDC debit does not exceed its independently allocated budget
 - SPYx Token-2022 compatibility and current issuer metadata
 - User and distribution eligibility for the intended jurisdiction
 

@@ -3,7 +3,8 @@ import { z } from "zod";
 import { inspectTransaction } from "@/server/transaction-inspection";
 
 const requestSchema = z.object({
-  stage: z.enum(["sale", "equity"]),
+  stage: z.enum(["sale", "purchase"]),
+  destinationId: z.enum(["spyx", "jup"]).optional(),
   taker: z.string().min(32).max(44),
   requestId: z.string().min(1),
   signedTransaction: z.string().min(1),
@@ -16,6 +17,9 @@ export async function POST(request: Request) {
 
   const parsed = requestSchema.safeParse(await request.json());
   if (!parsed.success) return NextResponse.json({ error: "Invalid execution request." }, { status: 400 });
+  if (parsed.data.stage === "purchase" && !parsed.data.destinationId) {
+    return NextResponse.json({ error: "A purchase destination is required." }, { status: 400 });
+  }
 
   try {
     await inspectTransaction(parsed.data.signedTransaction, parsed.data.taker);
@@ -41,6 +45,7 @@ export async function POST(request: Request) {
   const result = await response.json();
   return NextResponse.json({
     stage: parsed.data.stage,
+    destinationId: parsed.data.destinationId ?? null,
     status: result.status,
     signature: result.signature,
     code: result.code,

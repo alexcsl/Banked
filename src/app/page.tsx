@@ -1,5 +1,5 @@
-import { BankedFlow } from "@/components/banked-flow";
+import { CuratedRuleFlow } from "@/components/curated-rule-flow";
 
 export default function Home() {
-  return <main><BankedFlow /></main>;
+  return <main><CuratedRuleFlow /></main>;
 }

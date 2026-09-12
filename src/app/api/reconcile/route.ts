@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { SPYX_MINT, USDC_MINT } from "@/domain/assets";
+import { getPurchaseAsset, type PurchaseDestinationId, USDC_MINT } from "@/domain/assets";
 import { getRpcConnection } from "@/server/solana";
 
 const requestSchema = z.object({
-  stage: z.enum(["sale", "equity"]),
+  stage: z.enum(["sale", "purchase"]),
+  destinationId: z.enum(["spyx", "jup"]).optional(),
   wallet: z.string().min(32).max(44),
   signature: z.string().min(32).max(128),
 });
@@ -26,9 +27,16 @@ function tokenDelta(balances: { preTokenBalances?: TokenBalance[] | null; postTo
   return [...entries.values()].reduce((total, entry) => total + entry.post - entry.pre, 0n);
 }
 
+export function hasExpectedReconciliation(stage: "sale" | "purchase", usdcDelta: bigint, destinationDelta: bigint): boolean {
+  return stage === "sale" ? usdcDelta > 0n : usdcDelta < 0n && destinationDelta > 0n;
+}
+
 export async function POST(request: Request) {
   const parsed = requestSchema.safeParse(await request.json());
   if (!parsed.success) return NextResponse.json({ error: "Invalid reconciliation request." }, { status: 400 });
+  if (parsed.data.stage === "purchase" && !parsed.data.destinationId) {
+    return NextResponse.json({ error: "A purchase destination is required." }, { status: 400 });
+  }
 
   try {
     const transaction = await getRpcConnection().getTransaction(parsed.data.signature, {
@@ -39,16 +47,18 @@ export async function POST(request: Request) {
     if (transaction.meta?.err) return NextResponse.json({ status: "failed", error: transaction.meta.err });
 
     const usdcDelta = tokenDelta(transaction.meta ?? {}, parsed.data.wallet, USDC_MINT);
-    const spyxDelta = tokenDelta(transaction.meta ?? {}, parsed.data.wallet, SPYX_MINT);
-    const expectedDelta = parsed.data.stage === "sale" ? usdcDelta > 0n : usdcDelta < 0n && spyxDelta > 0n;
-    if (!expectedDelta) return NextResponse.json({ status: "ambiguous", usdcDelta: usdcDelta.toString(), spyxDelta: spyxDelta.toString() });
+    const destination = parsed.data.stage === "purchase" ? getPurchaseAsset(parsed.data.destinationId as PurchaseDestinationId) : null;
+    const destinationDelta = destination ? tokenDelta(transaction.meta ?? {}, parsed.data.wallet, destination.mint) : 0n;
+    const expectedDelta = hasExpectedReconciliation(parsed.data.stage, usdcDelta, destinationDelta);
+    if (!expectedDelta) return NextResponse.json({ status: "ambiguous", usdcDelta: usdcDelta.toString(), destinationDelta: destinationDelta.toString() });
 
     return NextResponse.json({
       status: "finalized",
       slot: transaction.slot,
       feeLamports: transaction.meta?.fee.toString() ?? "0",
       usdcDelta: usdcDelta.toString(),
-      spyxDelta: spyxDelta.toString(),
+      destinationId: destination?.id ?? null,
+      destinationDelta: destinationDelta.toString(),
     });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Reconciliation failed." }, { status: 503 });

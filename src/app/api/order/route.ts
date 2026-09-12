@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { SOL_MINT, SPYX_MINT, USDC_MINT } from "@/domain/assets";
+import { getPurchaseAsset, type PurchaseDestinationId, SOL_MINT, USDC_MINT } from "@/domain/assets";
 import { inspectTransaction } from "@/server/transaction-inspection";
 
 const requestSchema = z.object({
-  stage: z.enum(["sale", "equity"]),
+  stage: z.enum(["sale", "purchase"]),
+  destinationId: z.enum(["spyx", "jup"]).optional(),
   taker: z.string().min(32).max(44),
   amount: z.string().regex(/^\d+$/).refine((value) => BigInt(value) > 0n),
 });
@@ -18,9 +19,13 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: "Invalid order request." }, { status: 400 });
 
   const { stage, taker, amount } = parsed.data;
+  if (stage === "purchase" && !parsed.data.destinationId) {
+    return NextResponse.json({ error: "A purchase destination is required." }, { status: 400 });
+  }
+  const destination = stage === "purchase" ? getPurchaseAsset(parsed.data.destinationId as PurchaseDestinationId) : null;
   const params = new URLSearchParams({
     inputMint: stage === "sale" ? SOL_MINT : USDC_MINT,
-    outputMint: stage === "sale" ? USDC_MINT : SPYX_MINT,
+    outputMint: stage === "sale" ? USDC_MINT : destination!.mint,
     amount,
     taker,
     slippageBps: "50",
@@ -44,6 +49,7 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     stage,
+    destinationId: destination?.id ?? null,
     requestId: order.requestId,
     transaction: order.transaction,
     expectedOutput: order.outAmount,

@@ -1,0 +1,318 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { VersionedTransaction } from "@solana/web3.js";
+import { allocateRuleProceeds, formatAtomic, parseDecimalToAtomic } from "@/domain/allocation";
+import { getPurchaseAsset, type PurchaseDestinationId } from "@/domain/assets";
+import { createExitRule, createRuleOperation, reconcileRuleSale, updatePurchase, type ExitRule, type RuleOperation } from "@/domain/rules";
+import { deleteRule, loadRuleOperations, loadRules, saveRule, saveRuleOperation } from "@/storage/operations";
+
+type Quote = { destinationId: PurchaseDestinationId; expectedOutput: string; minimumOutput: string; feeBps: number; route: string };
+type PreparedOrder = Quote & { requestId: string; transaction: string; stage: "sale" | "purchase"; destinationId?: PurchaseDestinationId | null };
+type ExecutionResult = { status: "Success" | "Failed"; signature?: string; error?: string | null };
+type Reconciliation = { status: string; usdcDelta?: string; destinationDelta?: string };
+
+const fixtureUsdcPerSol = 125_030_864n;
+const lamportsPerSol = 1_000_000_000n;
+
+export function CuratedRuleFlow() {
+  const [saleAmount, setSaleAmount] = useState("1");
+  const [ruleName, setRuleName] = useState("De-risk SOL rally");
+  const [spyxBps, setSpyxBps] = useState(20);
+  const [jupBps, setJupBps] = useState(20);
+  const [mode, setMode] = useState<"fixture" | "live">("fixture");
+  const [wallet, setWallet] = useState<string | null>(null);
+  const [message, setMessage] = useState("Create an exit rule, then review its receipt before enabling live execution.");
+  const [rules, setRules] = useState<ExitRule[]>([]);
+  const [history, setHistory] = useState<RuleOperation[]>([]);
+  const [operation, setOperation] = useState<RuleOperation | null>(null);
+  const [preparedSale, setPreparedSale] = useState<PreparedOrder | null>(null);
+  const [preparedPurchases, setPreparedPurchases] = useState<Partial<Record<PurchaseDestinationId, PreparedOrder>>>({});
+  const [quotes, setQuotes] = useState<Partial<Record<PurchaseDestinationId, Quote>>>({});
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setRules(loadRules());
+      setHistory(loadRuleOperations());
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  const fixtureProceeds = useMemo(() => {
+    try {
+      return (parseDecimalToAtomic(saleAmount, 9) * fixtureUsdcPerSol) / lamportsPerSol;
+    } catch {
+      return 0n;
+    }
+  }, [saleAmount]);
+  const formAllocation = useMemo(() => allocateRuleProceeds(fixtureProceeds, { spyxBps, jupBps }), [fixtureProceeds, spyxBps, jupBps]);
+  const activeAllocation = useMemo(() => operation?.actualProceeds ? allocateRuleProceeds(BigInt(operation.actualProceeds), { spyxBps: operation.rule.spyxBps, jupBps: operation.rule.jupBps }) : formAllocation, [formAllocation, operation]);
+
+  function persistOperation(next: RuleOperation) {
+    saveRuleOperation(next);
+    setOperation(next);
+    setHistory(loadRuleOperations());
+  }
+
+  function buildRule(existing?: ExitRule): ExitRule | null {
+    try {
+      const next = createExitRule(ruleName, { spyxBps, jupBps });
+      if (!existing) return next;
+      return { ...next, id: existing.id, createdAt: existing.createdAt };
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "The rule is invalid.");
+      return null;
+    }
+  }
+
+  function changePercentage(destinationId: PurchaseDestinationId, value: number) {
+    const nextSpyx = destinationId === "spyx" ? value : spyxBps;
+    const nextJup = destinationId === "jup" ? value : jupBps;
+    if (nextSpyx + nextJup > 100) {
+      setMessage("SPYx and JUP allocations cannot exceed 100% of proceeds.");
+      return;
+    }
+    if (destinationId === "spyx") setSpyxBps(value);
+    else setJupBps(value);
+  }
+
+  function saveCurrentRule(existing?: ExitRule) {
+    const rule = buildRule(existing);
+    if (!rule) return;
+    saveRule(rule);
+    setRules(loadRules());
+    setMessage(`Saved ${rule.name}.`);
+  }
+
+  function selectRule(rule: ExitRule) {
+    setRuleName(rule.name);
+    setSpyxBps(rule.spyxBps);
+    setJupBps(rule.jupBps);
+    setMessage(`Loaded ${rule.name}.`);
+  }
+
+  function duplicateRule(rule: ExitRule) {
+    const copy = createExitRule(`${rule.name} copy`, { spyxBps: rule.spyxBps, jupBps: rule.jupBps });
+    saveRule(copy);
+    setRules(loadRules());
+    setMessage(`Saved ${copy.name}.`);
+  }
+
+  async function connectWallet() {
+    const provider = window.phantom?.solana;
+    if (!provider?.isPhantom) {
+      setMessage("Phantom is required for live execution. Fixture mode remains available.");
+      return;
+    }
+    const result = await provider.connect();
+    setWallet(result.publicKey.toBase58());
+    setMessage("Wallet connected. Every live purchase still requires your approval.");
+  }
+
+  async function loadQuote(destinationId: PurchaseDestinationId) {
+    const target = activeAllocation[destinationId];
+    if (!target.eligible) {
+      setMessage(`${getPurchaseAsset(destinationId).symbol} needs at least 10 USDC in this rule.`);
+      return;
+    }
+    const response = await fetch("/api/quote", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ destinationId, amount: target.budget.toString() }) });
+    const result = await response.json() as Quote & { error?: string };
+    if (!response.ok) {
+      setMessage(result.error ?? "The quote could not be loaded.");
+      return;
+    }
+    setQuotes((current) => ({ ...current, [destinationId]: result }));
+    setMessage(`Indicative ${getPurchaseAsset(destinationId).symbol} quote loaded.`);
+  }
+
+  function recordFixtureSale() {
+    const rule = buildRule();
+    if (!rule) return;
+    persistOperation(reconcileRuleSale(createRuleOperation(rule, "fixture"), fixtureProceeds));
+    setMessage("Fixture sale recorded. Each eligible destination can now be recorded independently.");
+  }
+
+  async function prepareLiveSale() {
+    if (!wallet) {
+      setMessage("Connect Phantom before preparing a live sale.");
+      return;
+    }
+    const rule = buildRule();
+    if (!rule) return;
+    let amount: bigint;
+    try {
+      amount = parseDecimalToAtomic(saleAmount, 9);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Enter a valid SOL amount.");
+      return;
+    }
+    const response = await fetch("/api/order", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage: "sale", taker: wallet, amount: amount.toString() }) });
+    const result = await response.json() as PreparedOrder & { error?: string };
+    if (!response.ok) {
+      setMessage(result.error ?? "A live sale could not be prepared.");
+      return;
+    }
+    persistOperation(createRuleOperation(rule, wallet));
+    setPreparedSale(result);
+    setMessage("Live sale prepared. Review the transaction in Phantom before signing.");
+  }
+
+  async function signAndSubmitSale() {
+    const provider = window.phantom?.solana;
+    if (!provider || !preparedSale || !operation || !wallet) return;
+    try {
+      const transaction = VersionedTransaction.deserialize(base64ToBytes(preparedSale.transaction));
+      const signed = await provider.signTransaction(transaction);
+      const submitted = { ...operation, saleStatus: "submitted" as const, updatedAt: new Date().toISOString() };
+      persistOperation(submitted);
+      const response = await fetch("/api/execute", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage: "sale", taker: wallet, requestId: preparedSale.requestId, signedTransaction: bytesToBase64(signed.serialize()) }) });
+      const result = await response.json() as ExecutionResult & { error?: string };
+      if (!response.ok || result.status !== "Success" || !result.signature) {
+        persistOperation({ ...submitted, saleStatus: "reconciliation-required", saleSignature: result.signature });
+        setMessage(result.error ?? "Sale submission needs chain reconciliation before retrying.");
+        return;
+      }
+      const reconciliation = await reconcile("sale", result.signature);
+      if (reconciliation?.status === "finalized" && reconciliation.usdcDelta) {
+        persistOperation({ ...reconcileRuleSale({ ...submitted, saleSignature: result.signature }, BigInt(reconciliation.usdcDelta)), saleSignature: result.signature });
+        setMessage("Sale finalized from actual USDC proceeds. Prepare either destination when ready.");
+      } else {
+        persistOperation({ ...submitted, saleStatus: "reconciliation-required", saleSignature: result.signature });
+        setMessage("Sale submitted. Reconcile it before preparing destination purchases.");
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Wallet signing was not completed.");
+    }
+  }
+
+  async function preparePurchase(destinationId: PurchaseDestinationId) {
+    if (!operation?.actualProceeds || operation.saleStatus !== "finalized" || !wallet) {
+      setMessage("Finalize the sale and connect Phantom before preparing a purchase.");
+      return;
+    }
+    const purchase = operation.purchases[destinationId];
+    if (purchase.status !== "ready" && purchase.status !== "pending") return;
+    const response = await fetch("/api/order", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage: "purchase", destinationId, taker: wallet, amount: purchase.budget }) });
+    const result = await response.json() as PreparedOrder & { error?: string };
+    if (!response.ok) {
+      setMessage(result.error ?? `The ${getPurchaseAsset(destinationId).symbol} purchase could not be prepared.`);
+      return;
+    }
+    persistOperation(updatePurchase(operation, destinationId, { status: "prepared", expectedOutput: result.expectedOutput }));
+    setPreparedPurchases((current) => ({ ...current, [destinationId]: result }));
+    setMessage(`${getPurchaseAsset(destinationId).symbol} purchase prepared from finalized proceeds.`);
+  }
+
+  async function signAndSubmitPurchase(destinationId: PurchaseDestinationId) {
+    const provider = window.phantom?.solana;
+    const prepared = preparedPurchases[destinationId];
+    if (!provider || !prepared || !operation || !wallet) return;
+    try {
+      const transaction = VersionedTransaction.deserialize(base64ToBytes(prepared.transaction));
+      const signed = await provider.signTransaction(transaction);
+      const submitted = updatePurchase(operation, destinationId, { status: "submitted" });
+      persistOperation(submitted);
+      const response = await fetch("/api/execute", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage: "purchase", destinationId, taker: wallet, requestId: prepared.requestId, signedTransaction: bytesToBase64(signed.serialize()) }) });
+      const result = await response.json() as ExecutionResult & { error?: string };
+      if (!response.ok || result.status !== "Success" || !result.signature) {
+        persistOperation(updatePurchase(submitted, destinationId, { status: "pending", signature: result.signature }));
+        setMessage(result.error ?? `${getPurchaseAsset(destinationId).symbol} needs reconciliation before retrying.`);
+        return;
+      }
+      const reconciliation = await reconcile("purchase", result.signature, destinationId);
+      if (reconciliation?.status === "finalized") {
+        persistOperation(updatePurchase(submitted, destinationId, { status: "finalized", signature: result.signature, actualOutput: reconciliation.destinationDelta }));
+        setMessage(`${getPurchaseAsset(destinationId).symbol} purchase finalized.`);
+      } else {
+        persistOperation(updatePurchase(submitted, destinationId, { status: "pending", signature: result.signature }));
+        setMessage(`${getPurchaseAsset(destinationId).symbol} purchase submitted and awaiting reconciliation.`);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Wallet signing was not completed.");
+    }
+  }
+
+  function recordFixturePurchase(destinationId: PurchaseDestinationId) {
+    if (!operation) return;
+    persistOperation(updatePurchase(operation, destinationId, { status: "finalized", actualOutput: "fixture" }));
+    setMessage(`${getPurchaseAsset(destinationId).symbol} fixture purchase recorded.`);
+  }
+
+  async function reconcile(stage: "sale" | "purchase", signature: string, destinationId?: PurchaseDestinationId): Promise<Reconciliation | null> {
+    const response = await fetch("/api/reconcile", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage, destinationId, wallet, signature }) });
+    return response.ok ? response.json() as Promise<Reconciliation> : null;
+  }
+
+  async function copyReceipt() {
+    if (!operation) return;
+    await navigator.clipboard.writeText(receiptText(operation));
+    setMessage("Receipt copied to your clipboard.");
+  }
+
+  function downloadReceipt() {
+    if (!operation) return;
+    const blob = new Blob([JSON.stringify(operation, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `banked-${operation.id}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return <div className="shell">
+    <header><span className="brand">Banked</span><span className={`mode ${mode}`}>{mode === "fixture" ? "Fixture mode" : "Live gate"}</span></header>
+    <section className="hero"><p className="eyebrow">CURATED EXIT RULES</p><h1>Precommit your exit allocation.</h1><p>Sell SOL to USDC, then independently approve the SPYx and JUP purchases your rule qualifies for. Unallocated and skipped proceeds remain spendable USDC.</p></section>
+    <section className="panel controls">
+      <div className="field"><label htmlFor="rule-name">Rule name</label><input id="rule-name" value={ruleName} maxLength={60} onChange={(event) => setRuleName(event.target.value)} /></div>
+      <div className="field"><label htmlFor="sale">Sell SOL</label><input id="sale" inputMode="decimal" value={saleAmount} onChange={(event) => setSaleAmount(event.target.value)} /><small>Demo rate: 1 SOL = 125.030864 USDC. It is synthetic test data.</small></div>
+      <AllocationControl id="spyx" value={spyxBps} onChange={changePercentage} />
+      <AllocationControl id="jup" value={jupBps} onChange={changePercentage} />
+      <div className="actions"><button className="secondary" onClick={() => setMode(mode === "fixture" ? "live" : "fixture")}>Switch to {mode === "fixture" ? "live gate" : "fixture"}</button><button className="secondary" onClick={() => saveCurrentRule()}>Save rule</button><button onClick={connectWallet}>{wallet ? `${wallet.slice(0, 4)}...${wallet.slice(-4)}` : "Connect Phantom"}</button></div>
+    </section>
+    <section className="grid">
+      <ReceiptCard label={operation?.actualProceeds ? "FINALIZED PROCEEDS" : "DEMO PROCEEDS"} amount={activeAllocation.proceeds} detail={operation?.actualProceeds ? "Actual sale output" : "Synthetic flow testing"} />
+      <ReceiptCard label="SPYx BUDGET" amount={activeAllocation.spyx.budget} detail={activeAllocation.spyx.eligible ? "Eligible for purchase" : "Skipped below 10 USDC"} />
+      <ReceiptCard label="JUP BUDGET" amount={activeAllocation.jup.budget} detail={activeAllocation.jup.eligible ? "Eligible for purchase" : "Skipped below 10 USDC"} />
+      <ReceiptCard label="RETAINED USDC" amount={activeAllocation.retainedUsdc} detail="Always spendable in your wallet" />
+    </section>
+    <section className="panel review"><div><p className="eyebrow">SALE STAGE</p><h2>Record actual proceeds before purchases</h2><p>Fixture mode records synthetic proceeds. Live mode prepares a wallet-bound Jupiter transaction, which you review and sign in Phantom.</p></div><div className="actions compact">{mode === "fixture" ? <button onClick={recordFixtureSale}>Record fixture sale</button> : <><button className="secondary" onClick={prepareLiveSale}>Prepare live sale</button>{preparedSale && operation?.saleStatus === "prepared" && <button onClick={signAndSubmitSale}>Sign and submit sale</button>}</>}</div></section>
+    {operation?.saleStatus === "finalized" && <section className="purchase-grid">{(["spyx", "jup"] as PurchaseDestinationId[]).map((destinationId) => <PurchaseCard key={destinationId} destinationId={destinationId} operation={operation} quote={quotes[destinationId]} mode={mode} onQuote={loadQuote} onFixture={recordFixturePurchase} onPrepare={preparePurchase} onSign={signAndSubmitPurchase} prepared={Boolean(preparedPurchases[destinationId])} />)}</section>}
+    {operation && <section className="panel receipt-actions"><div><p className="eyebrow">RULE RECEIPT</p><h2>{operation.rule.name}</h2><p>Planned split: {operation.rule.spyxBps}% SPYx, {operation.rule.jupBps}% JUP, {100 - operation.rule.spyxBps - operation.rule.jupBps}% retained USDC.</p></div><div className="actions compact"><button className="secondary" onClick={copyReceipt}>Copy receipt</button><button className="secondary" onClick={downloadReceipt}>Download JSON</button></div></section>}
+    <section className="panel history"><p className="eyebrow">SAVED RULES</p>{rules.length ? rules.map((rule) => <div className="history-row" key={rule.id}><span>{rule.name} · {rule.spyxBps}% SPYx / {rule.jupBps}% JUP</span><div><button className="text-button" onClick={() => selectRule(rule)}>Load</button><button className="text-button" onClick={() => duplicateRule(rule)}>Duplicate</button><button className="text-button" onClick={() => { deleteRule(rule.id); setRules(loadRules()); }}>Delete</button></div></div>) : <p>No saved rules yet.</p>}<p className="eyebrow history-label">RECENT OPERATIONS</p>{history.length ? history.map((item) => <div className="history-row" key={item.id}><span>{item.rule.name}</span><span>{item.saleStatus} · {item.actualProceeds ? `${formatAtomic(BigInt(item.actualProceeds), 6, 4)} USDC` : "Awaiting proceeds"}</span></div>) : <p>No operations yet.</p>}</section>
+    <p className="status" role="status">{message}</p>
+    <section className="disclosure"><h2>Execution boundary</h2><p>Banked records a precommitted rule and prepares exact transactions. It never requests seed phrases, delegated authority, custody transfers, or background wallet access.</p></section>
+  </div>;
+}
+
+function AllocationControl({ id, value, onChange }: { id: PurchaseDestinationId; value: number; onChange: (id: PurchaseDestinationId, value: number) => void }) {
+  const asset = getPurchaseAsset(id);
+  return <div className="field"><label htmlFor={`${id}-allocation`}>Allocate to {asset.symbol}</label><div className="range-row"><input id={`${id}-allocation`} type="range" min="0" max="100" value={value} onChange={(event) => onChange(id, Number(event.target.value))} /><output>{value}%</output></div><small>{asset.kind === "xstock" ? "xStock economic exposure, not direct share ownership." : "Curated Solana token destination."}</small></div>;
+}
+
+function ReceiptCard({ label, amount, detail }: { label: string; amount: bigint; detail: string }) {
+  return <article className="panel receipt"><p className="eyebrow">{label}</p><strong>{formatAtomic(amount, 6, 6)} USDC</strong><span>{detail}</span></article>;
+}
+
+function PurchaseCard({ destinationId, operation, quote, mode, onQuote, onFixture, onPrepare, onSign, prepared }: { destinationId: PurchaseDestinationId; operation: RuleOperation; quote?: Quote; mode: "fixture" | "live"; onQuote: (id: PurchaseDestinationId) => void; onFixture: (id: PurchaseDestinationId) => void; onPrepare: (id: PurchaseDestinationId) => void; onSign: (id: PurchaseDestinationId) => void; prepared: boolean }) {
+  const asset = getPurchaseAsset(destinationId);
+  const purchase = operation.purchases[destinationId];
+  const canPrepare = purchase.status === "ready" || purchase.status === "pending";
+  return <section className="panel purchase-card"><div><p className="eyebrow">{asset.kind === "xstock" ? "XSTOCK" : "SOLANA TOKEN"}</p><h2>{asset.symbol}</h2><p>{formatAtomic(BigInt(purchase.budget), 6, 6)} USDC · {purchase.status}</p>{quote && <p>Quote: {formatAtomic(BigInt(quote.expectedOutput), asset.decimals, 6)} {asset.symbol}, minimum {formatAtomic(BigInt(quote.minimumOutput), asset.decimals, 6)}</p>}</div><div className="actions compact"><button className="secondary" onClick={() => onQuote(destinationId)} disabled={purchase.status === "skipped"}>Quote</button>{mode === "fixture" && purchase.status === "ready" && <button onClick={() => onFixture(destinationId)}>Record fixture purchase</button>}{mode === "live" && canPrepare && <button onClick={() => onPrepare(destinationId)}>Prepare purchase</button>}{mode === "live" && prepared && purchase.status === "prepared" && <button onClick={() => onSign(destinationId)}>Sign purchase</button>}</div></section>;
+}
+
+function receiptText(operation: RuleOperation): string {
+  return [`Banked rule receipt: ${operation.rule.name}`, `Sale: ${operation.saleStatus}`, `USDC proceeds: ${operation.actualProceeds ?? "pending"}`, ...Object.values(operation.purchases).map((purchase) => `${getPurchaseAsset(purchase.destinationId).symbol}: ${purchase.status}, budget ${purchase.budget} USDC${purchase.signature ? `, signature ${purchase.signature}` : ""}`)].join("\n");
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  return Uint8Array.from(window.atob(value), (character) => character.charCodeAt(0));
+}
+
+function bytesToBase64(value: Uint8Array): string {
+  return window.btoa(String.fromCharCode(...value));
+}
+
+declare global {
+  interface Window { phantom?: { solana?: { isPhantom?: boolean; connect: () => Promise<{ publicKey: { toBase58: () => string } }>; signTransaction: (transaction: VersionedTransaction) => Promise<VersionedTransaction> } } }
+}
