@@ -11,6 +11,7 @@ type Quote = { destinationId: PurchaseDestinationId; expectedOutput: string; min
 type PreparedOrder = Quote & { requestId: string; transaction: string; stage: "sale" | "purchase"; destinationId?: PurchaseDestinationId | null };
 type ExecutionResult = { status: "Success" | "Failed"; signature?: string; error?: string | null };
 type Reconciliation = { status: string; usdcDelta?: string; destinationDelta?: string };
+type DetectedExit = { signature: string; slot: number; blockTime: number | null; solDebited: string; usdcReceived: string };
 
 const fixtureUsdcPerSol = 125_030_864n;
 const lamportsPerSol = 1_000_000_000n;
@@ -29,6 +30,8 @@ export function CuratedRuleFlow() {
   const [preparedSale, setPreparedSale] = useState<PreparedOrder | null>(null);
   const [preparedPurchases, setPreparedPurchases] = useState<Partial<Record<PurchaseDestinationId, PreparedOrder>>>({});
   const [quotes, setQuotes] = useState<Partial<Record<PurchaseDestinationId, Quote>>>({});
+  const [detectedExits, setDetectedExits] = useState<DetectedExit[]>([]);
+  const [scanningExits, setScanningExits] = useState(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -131,6 +134,43 @@ export function CuratedRuleFlow() {
     }
     setQuotes((current) => ({ ...current, [destinationId]: result }));
     setMessage(`Indicative ${getPurchaseAsset(destinationId).symbol} quote loaded.`);
+  }
+
+  async function scanRecentExits() {
+    if (!wallet) {
+      setMessage("Connect a wallet before scanning its finalized exit candidates.");
+      return;
+    }
+    setScanningExits(true);
+    setMessage("Scanning recent finalized SOL-to-USDC exit candidates.");
+    try {
+      const response = await fetch("/api/exits/recent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ wallet }) });
+      const result = await response.json() as { exits?: DetectedExit[]; error?: string };
+      if (!response.ok) {
+        setMessage(result.error ?? "Recent exit detection is unavailable.");
+        return;
+      }
+      setDetectedExits(result.exits ?? []);
+      setMessage(result.exits?.length ? "Review a finalized candidate before applying this rule." : "No finalized SOL-to-USDC exit candidates were found in the recent scan.");
+    } catch {
+      setMessage("Recent exit detection is unavailable.");
+    } finally {
+      setScanningExits(false);
+    }
+  }
+
+  function importDetectedExit(exit: DetectedExit) {
+    if (!wallet) return;
+    if (history.some((item) => item.saleSignature === exit.signature)) {
+      setMessage("This exit is already in Banked history.");
+      return;
+    }
+    const rule = buildRule();
+    if (!rule) return;
+    const imported = reconcileRuleSale(createRuleOperation(rule, wallet), BigInt(exit.usdcReceived));
+    persistOperation({ ...imported, saleSignature: exit.signature, saleSource: "detected" });
+    setDetectedExits((exits) => exits.filter((candidate) => candidate.signature !== exit.signature));
+    setMessage("External exit imported from finalized on-chain balances. Complete any eligible destination when ready.");
   }
 
   function recordFixtureSale() {
@@ -273,7 +313,7 @@ export function CuratedRuleFlow() {
     <main>
       <section className="workspace-intro"><p className="section-kicker">EXIT ALLOCATION</p><h1>Set the rule before you sell.</h1><p>Convert a SOL exit into a planned allocation. Banked calculates from finalized USDC proceeds and requires your approval for every purchase.</p></section>
       <section className="workspace-grid" id="rule">
-        <section className="rule-workbench" aria-labelledby="rule-heading"><div className="section-heading"><p className="section-kicker">01 · DEFINE</p><h2 id="rule-heading">Exit rule</h2><button className="link-button" onClick={() => saveCurrentRule()}>Save rule</button></div><div className="form-stack"><label className="workspace-field" htmlFor="rule-name"><span>Rule name</span><input id="rule-name" value={ruleName} maxLength={60} onChange={(event) => setRuleName(event.target.value)} /></label><label className="workspace-field" htmlFor="sale"><span>SOL to sell</span><div className="amount-input"><input id="sale" inputMode="decimal" value={saleAmount} onChange={(event) => setSaleAmount(event.target.value)} /><strong>SOL</strong></div><small>Simulation uses 1 SOL = 125.030864 USDC.</small></label><AllocationControl id="spyx" value={spyxBps} onChange={changePercentage} /><AllocationControl id="jup" value={jupBps} onChange={changePercentage} /></div><div className="template-list" aria-label="Rule templates"><p className="section-kicker">START WITH A TEMPLATE</p>{exitRuleTemplates.map((template) => <button className="template-row" key={template.id} onClick={() => applyTemplate(template)}><span><strong>{template.name}</strong><small>{template.description}</small></span><span>{template.spyxBps}% SPYx / {template.jupBps}% JUP</span></button>)}</div></section>
+        <section className="rule-workbench" aria-labelledby="rule-heading"><div className="section-heading"><p className="section-kicker">01 · DEFINE</p><h2 id="rule-heading">Exit rule</h2><button className="link-button" onClick={() => saveCurrentRule()}>Save rule</button></div><div className="form-stack"><label className="workspace-field" htmlFor="rule-name"><span>Rule name</span><input id="rule-name" value={ruleName} maxLength={60} onChange={(event) => setRuleName(event.target.value)} /></label><label className="workspace-field" htmlFor="sale"><span>SOL to sell</span><div className="amount-input"><input id="sale" inputMode="decimal" value={saleAmount} onChange={(event) => setSaleAmount(event.target.value)} /><strong>SOL</strong></div><small>Simulation uses 1 SOL = 125.030864 USDC.</small></label><AllocationControl id="spyx" value={spyxBps} onChange={changePercentage} /><AllocationControl id="jup" value={jupBps} onChange={changePercentage} /></div><div className="template-list" aria-label="Rule templates"><p className="section-kicker">START WITH A TEMPLATE</p>{exitRuleTemplates.map((template) => <button className="template-row" key={template.id} onClick={() => applyTemplate(template)}><span><strong>{template.name}</strong><small>{template.description}</small></span><span>{template.spyxBps}% SPYx / {template.jupBps}% JUP</span></button>)}</div><section className="detected-exits" aria-labelledby="detected-exits-heading"><div className="section-heading"><div><p className="section-kicker">EXTERNAL EXIT DETECTION</p><h3 id="detected-exits-heading">Apply this rule to a completed exit</h3></div><button className="secondary-action" onClick={scanRecentExits} disabled={scanningExits}>{scanningExits ? "Scanning exits" : "Scan wallet"}</button></div><p>Banked finds finalized SOL-debit and USDC-credit candidates. Review before importing. Importing never sends a transaction.</p>{detectedExits.map((exit) => <div className="detected-exit" key={exit.signature}><span>{formatAtomic(BigInt(exit.solDebited), 9, 4)} SOL to {formatAtomic(BigInt(exit.usdcReceived), 6, 4)} USDC<small>{formatExitTime(exit.blockTime)} · {exit.signature.slice(0, 8)}…{exit.signature.slice(-6)}</small></span><button className="link-button" onClick={() => importDetectedExit(exit)}>Apply rule</button></div>)}</section></section>
         <aside className="allocation-review" aria-labelledby="allocation-heading"><div className="section-heading"><div><p className="section-kicker">02 · REVIEW</p><h2 id="allocation-heading">Allocation</h2></div><span className="plain-status">{operation?.actualProceeds ? "Finalized proceeds" : "Estimated proceeds"}</span></div><div className="proceeds"><span>{operation?.actualProceeds ? "USDC received" : "Estimated USDC"}</span><strong>{formatAtomic(activeAllocation.proceeds, 6, 6)}</strong></div><dl className="allocation-lines"><AllocationLine label="SPYx" amount={activeAllocation.spyx.budget} note={activeAllocation.spyx.eligible ? "Eligible" : "Below 10 USDC"} /><AllocationLine label="JUP" amount={activeAllocation.jup.budget} note={activeAllocation.jup.eligible ? "Eligible" : "Below 10 USDC"} /><AllocationLine label="Retained USDC" amount={activeAllocation.retainedUsdc} note="Stays spendable" /></dl><ol className="execution-steps"><Step number="01" label="Define rule" active /><Step number="02" label="Confirm proceeds" active={Boolean(operation?.actualProceeds)} /><Step number="03" label="Complete destinations" active={operation?.saleStatus === "finalized"} /></ol><div className="primary-action">{mode === "fixture" ? <button onClick={recordFixtureSale}>Record simulation proceeds</button> : <>{!preparedSale && <button onClick={prepareLiveSale}>Prepare live sale</button>}{preparedSale && operation?.saleStatus === "prepared" && <button onClick={signAndSubmitSale}>Review and sign sale</button>}</>}</div></aside>
       </section>
       {operation?.saleStatus === "finalized" && <section className="destination-section" aria-labelledby="destinations-heading"><div className="section-heading"><div><p className="section-kicker">03 · COMPLETE</p><h2 id="destinations-heading">Finish eligible destinations</h2></div><p>Each destination is independent. A delayed purchase never locks retained USDC.</p></div><div className="destination-grid">{(["spyx", "jup"] as PurchaseDestinationId[]).map((destinationId) => <PurchaseCard key={destinationId} destinationId={destinationId} operation={operation} quote={quotes[destinationId]} mode={mode} onQuote={loadQuote} onFixture={recordFixturePurchase} onPrepare={preparePurchase} onSign={signAndSubmitPurchase} prepared={Boolean(preparedPurchases[destinationId])} />)}</div></section>}
@@ -312,6 +352,10 @@ function PurchaseCard({ destinationId, operation, quote, mode, onQuote, onFixtur
 
 function StatusMark() {
   return <svg aria-hidden="true" viewBox="0 0 16 16" focusable="false"><path d="m3 8 3 3 7-7" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>;
+}
+
+function formatExitTime(blockTime: number | null): string {
+  return blockTime ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(blockTime * 1000)) : "Finalized on-chain";
 }
 
 function receiptText(operation: RuleOperation): string {

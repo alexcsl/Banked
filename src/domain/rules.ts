@@ -25,6 +25,7 @@ export type RuleOperation = {
   rule: ExitRule;
   saleStatus: "prepared" | "submitted" | "finalized" | "reconciliation-required";
   saleSignature?: string;
+  saleSource?: "banked" | "detected";
   actualProceeds?: string;
   purchases: Record<PurchaseDestinationId, DestinationPurchase>;
   createdAt: string;
@@ -56,7 +57,7 @@ export function createRuleOperation(rule: ExitRule, wallet: string, saleStatus: 
   const allocation = allocateRuleProceeds(0n, { spyxBps: rule.spyxBps, jupBps: rule.jupBps });
   const now = new Date().toISOString();
   return {
-    id: crypto.randomUUID(), wallet, rule, saleStatus,
+    id: crypto.randomUUID(), wallet, rule, saleStatus, saleSource: "banked",
     purchases: {
       spyx: { destinationId: "spyx", budget: allocation.spyx.budget.toString(), status: "skipped" },
       jup: { destinationId: "jup", budget: allocation.jup.budget.toString(), status: "skipped" },
