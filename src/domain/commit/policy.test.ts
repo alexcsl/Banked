@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allocateCommitDeposit, remainingDailyAllowance, reserveShare, unclassifiedInventory, utcPeriodId } from "@/domain/commit/policy";
+import { allocateCommitDeposit, describeCommitMandate, remainingDailyAllowance, reserveShare, unclassifiedInventory, utcPeriodId } from "@/domain/commit/policy";
 
 describe("Commit deposit accounting", () => {
   it("rounds every deposit toward the reserve", () => {
@@ -20,5 +20,12 @@ describe("Commit deposit accounting", () => {
 
   it("does not classify unsolicited deposits as executor inventory", () => {
     expect(unclassifiedInventory({ reservedRaw: 80n, operatingRaw: 20n, actualReserveRaw: 82n, actualOperatingRaw: 25n })).toBe(7n);
+  });
+
+  it("describes the constrained authority in plain language", () => {
+    expect(describeCommitMandate({ reserveBps: 8_000, dailyLimitRaw: "100000000", executor: "executor", recipient: "recipient" })).toEqual({
+      reserve: "80% of each deposit is classified as reserve inventory.",
+      payment: "executor can send up to 1 TEST each UTC day, only to recipient.",
+    });
   });
 });

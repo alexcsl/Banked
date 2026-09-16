@@ -63,6 +63,30 @@ export function unclassifiedInventory(balances: CommitBalances) {
   return reserve + operating;
 }
 
+export function describeCommitMandate(policy: Pick<CommitPolicyV1, "reserveBps" | "dailyLimitRaw" | "executor" | "recipient">, decimals = 8) {
+  const reservePercent = (policy.reserveBps / 100).toFixed(policy.reserveBps % 100 === 0 ? 0 : 2);
+  const allowance = formatCommitAmount(policy.dailyLimitRaw, decimals);
+  const executor = policy.executor || "the executor you choose";
+  const recipient = policy.recipient || "the recipient you approve";
+
+  return {
+    reserve: `${reservePercent}% of each deposit is classified as reserve inventory.`,
+    payment: `${executor} can send up to ${allowance} TEST each UTC day, only to ${recipient}.`,
+  };
+}
+
+function formatCommitAmount(amount: string, decimals: number) {
+  try {
+    const raw = BigInt(amount);
+    const unit = 10n ** BigInt(decimals);
+    const whole = raw / unit;
+    const fraction = (raw % unit).toString().padStart(decimals, "0").replace(/0+$/, "");
+    return fraction ? `${whole}.${fraction}` : whole.toString();
+  } catch {
+    return "0";
+  }
+}
+
 function isPublicKeyLike(value: string) {
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value);
 }
