@@ -1,0 +1,13 @@
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+banked_commit = "BXbCRa6rLmCK3ZXGCrFmks4AGjR1ovBNbqbJhwqNbPD1"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "npm run test:commit"
