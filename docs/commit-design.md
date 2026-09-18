@@ -20,11 +20,13 @@ Every mutation creates a receipt PDA from the vault and expected sequence. Direc
 
 ## Current capability status
 
-The program has passed native Rust compilation and TypeScript accounting/PDA tests. It has not passed SBF compilation or a local-validator test because the installed Agave platform-tools download times out in WSL. The Commit workspace therefore reports no active spend authority until a deployed program, configured program ID, and matching cluster genesis hash are verified.
+The program has passed native Rust compilation and TypeScript accounting/PDA tests. The browser instruction layer builds only the program's fixed initialize, deposit, and payment account layouts, including canonical Token-2022 token accounts and receipt PDAs. Recipient token accounts are created through the associated-token program when an approved recipient does not already have one.
+
+The vault's fixed allocation is 512 bytes including its discriminator. The contract is not deployed. It has not passed SBF compilation or a local-validator test because the installed Agave platform-tools download times out in WSL. The Commit workspace therefore reports no active spend authority until a deployed program, configured program ID, and matching cluster genesis hash are verified.
 
 ## Finish the local-validator proof
 
-Run these commands from Ubuntu WSL after platform tools are available:
+Run these commands from Ubuntu WSL after platform tools are available. The platform-tools archive is approximately 495 MB, so use a stable connection and leave at least 2 GB free on the WSL filesystem:
 
 ```bash
 cd /mnt/d/Hackathon/BankedStocklana
