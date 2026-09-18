@@ -250,7 +250,9 @@ pub struct Initialize<'info> {
     pub mint: InterfaceAccount<'info, Mint>,
     pub token_program: Interface<'info, TokenInterface>,
     #[account(init, payer = owner, space = Vault::LEN, seeds = [b"commit", owner.key().as_ref()], bump)] pub vault: Account<'info, Vault>,
+    /// CHECK: This PDA is constrained by its reserve seed and is only used as an ATA authority.
     #[account(seeds = [b"reserve", vault.key().as_ref()], bump)] pub reserve_authority: UncheckedAccount<'info>,
+    /// CHECK: This PDA is constrained by its operating seed and is only used as an ATA authority.
     #[account(seeds = [b"operating", vault.key().as_ref()], bump)] pub operating_authority: UncheckedAccount<'info>,
     #[account(init_if_needed, payer = owner, associated_token::mint = mint, associated_token::authority = reserve_authority, associated_token::token_program = token_program)] pub reserve_token_account: InterfaceAccount<'info, TokenAccount>,
     #[account(init_if_needed, payer = owner, associated_token::mint = mint, associated_token::authority = operating_authority, associated_token::token_program = token_program)] pub operating_token_account: InterfaceAccount<'info, TokenAccount>,
@@ -262,12 +264,14 @@ pub struct Initialize<'info> {
 pub struct Deposit<'info> {
     #[account(mut)] pub owner: Signer<'info>,
     pub mint: InterfaceAccount<'info, Mint>, pub token_program: Interface<'info, TokenInterface>,
-    #[account(mut, seeds = [b"commit", vault.owner.as_ref()], bump = vault.vault_bump, constraint = vault.mint == mint.key() @ CommitError::WrongMint, constraint = vault.token_program == token_program.key() @ CommitError::WrongTokenProgram)] pub vault: Account<'info, Vault>,
-    #[account(mut, token::mint = mint, token::authority = owner, token::token_program = token_program)] pub owner_token_account: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut, seeds = [b"commit", vault.owner.as_ref()], bump = vault.vault_bump, constraint = vault.mint == mint.key() @ CommitError::WrongMint, constraint = vault.token_program == token_program.key() @ CommitError::WrongTokenProgram)] pub vault: Box<Account<'info, Vault>>,
+    #[account(mut, token::mint = mint, token::authority = owner, token::token_program = token_program)] pub owner_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    /// CHECK: This PDA is constrained by its stored reserve bump and is only used as an ATA authority.
     #[account(seeds = [b"reserve", vault.key().as_ref()], bump = vault.reserve_authority_bump)] pub reserve_authority: UncheckedAccount<'info>,
+    /// CHECK: This PDA is constrained by its stored operating bump and is only used as an ATA authority.
     #[account(seeds = [b"operating", vault.key().as_ref()], bump = vault.operating_authority_bump)] pub operating_authority: UncheckedAccount<'info>,
-    #[account(mut, associated_token::mint = mint, associated_token::authority = reserve_authority, associated_token::token_program = token_program)] pub reserve_token_account: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, associated_token::mint = mint, associated_token::authority = operating_authority, associated_token::token_program = token_program)] pub operating_token_account: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut, associated_token::mint = mint, associated_token::authority = reserve_authority, associated_token::token_program = token_program)] pub reserve_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(mut, associated_token::mint = mint, associated_token::authority = operating_authority, associated_token::token_program = token_program)] pub operating_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(init, payer = owner, space = Receipt::LEN, seeds = [b"receipt", vault.key().as_ref(), &expected_sequence.to_le_bytes()], bump)] pub receipt: Account<'info, Receipt>, pub system_program: Program<'info, System>,
 }
 
@@ -275,11 +279,13 @@ pub struct Deposit<'info> {
 #[instruction(expected_sequence: u64, expected_policy_version: u64, amount: u64, expires_at: i64)]
 pub struct Pay<'info> {
     #[account(mut)] pub executor: Signer<'info>, pub mint: InterfaceAccount<'info, Mint>, pub token_program: Interface<'info, TokenInterface>,
-    #[account(mut, seeds = [b"commit", vault.owner.as_ref()], bump = vault.vault_bump, constraint = vault.mint == mint.key() @ CommitError::WrongMint, constraint = vault.token_program == token_program.key() @ CommitError::WrongTokenProgram)] pub vault: Account<'info, Vault>,
+    #[account(mut, seeds = [b"commit", vault.owner.as_ref()], bump = vault.vault_bump, constraint = vault.mint == mint.key() @ CommitError::WrongMint, constraint = vault.token_program == token_program.key() @ CommitError::WrongTokenProgram)] pub vault: Box<Account<'info, Vault>>,
+    /// CHECK: This PDA is constrained by its stored operating bump and is only used as an ATA authority.
     #[account(seeds = [b"operating", vault.key().as_ref()], bump = vault.operating_authority_bump)] pub operating_authority: UncheckedAccount<'info>,
-    #[account(mut, associated_token::mint = mint, associated_token::authority = operating_authority, associated_token::token_program = token_program)] pub operating_token_account: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut, associated_token::mint = mint, associated_token::authority = operating_authority, associated_token::token_program = token_program)] pub operating_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    /// CHECK: The stored policy recipient address is enforced and only used as the recipient ATA authority.
     #[account(address = vault.recipient @ CommitError::WrongRecipient)] pub recipient: UncheckedAccount<'info>,
-    #[account(init_if_needed, payer = executor, associated_token::mint = mint, associated_token::authority = recipient, associated_token::token_program = token_program)] pub recipient_token_account: InterfaceAccount<'info, TokenAccount>,
+    #[account(init_if_needed, payer = executor, associated_token::mint = mint, associated_token::authority = recipient, associated_token::token_program = token_program)] pub recipient_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(init, payer = executor, space = Receipt::LEN, seeds = [b"receipt", vault.key().as_ref(), &expected_sequence.to_le_bytes()], bump)] pub receipt: Account<'info, Receipt>, pub associated_token_program: Program<'info, AssociatedToken>, pub system_program: Program<'info, System>,
 }
 
@@ -293,11 +299,39 @@ pub struct OwnerAction<'info> { #[account(mut)] pub owner: Signer<'info>, #[acco
 
 #[derive(Accounts)]
 #[instruction(expected_sequence: u64, bucket: Bucket, amount: u64)]
-pub struct Withdraw<'info> { #[account(mut)] pub owner: Signer<'info>, pub mint: InterfaceAccount<'info, Mint>, pub token_program: Interface<'info, TokenInterface>, #[account(mut, seeds = [b"commit", vault.owner.as_ref()], bump = vault.vault_bump, constraint = vault.mint == mint.key() @ CommitError::WrongMint, constraint = vault.token_program == token_program.key() @ CommitError::WrongTokenProgram)] pub vault: Account<'info, Vault>, #[account(seeds = [b"reserve", vault.key().as_ref()], bump = vault.reserve_authority_bump)] pub reserve_authority: UncheckedAccount<'info>, #[account(seeds = [b"operating", vault.key().as_ref()], bump = vault.operating_authority_bump)] pub operating_authority: UncheckedAccount<'info>, #[account(mut, associated_token::mint = mint, associated_token::authority = reserve_authority, associated_token::token_program = token_program)] pub reserve_token_account: InterfaceAccount<'info, TokenAccount>, #[account(mut, associated_token::mint = mint, associated_token::authority = operating_authority, associated_token::token_program = token_program)] pub operating_token_account: InterfaceAccount<'info, TokenAccount>, #[account(mut, token::mint = mint, token::authority = owner, token::token_program = token_program)] pub owner_token_account: InterfaceAccount<'info, TokenAccount>, #[account(init, payer = owner, space = Receipt::LEN, seeds = [b"receipt", vault.key().as_ref(), &expected_sequence.to_le_bytes()], bump)] pub receipt: Account<'info, Receipt>, pub system_program: Program<'info, System> }
+pub struct Withdraw<'info> {
+    #[account(mut)] pub owner: Signer<'info>,
+    pub mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
+    #[account(mut, seeds = [b"commit", vault.owner.as_ref()], bump = vault.vault_bump, constraint = vault.mint == mint.key() @ CommitError::WrongMint, constraint = vault.token_program == token_program.key() @ CommitError::WrongTokenProgram)] pub vault: Box<Account<'info, Vault>>,
+    /// CHECK: This PDA is constrained by its stored reserve bump and is only used as an ATA authority.
+    #[account(seeds = [b"reserve", vault.key().as_ref()], bump = vault.reserve_authority_bump)] pub reserve_authority: UncheckedAccount<'info>,
+    /// CHECK: This PDA is constrained by its stored operating bump and is only used as an ATA authority.
+    #[account(seeds = [b"operating", vault.key().as_ref()], bump = vault.operating_authority_bump)] pub operating_authority: UncheckedAccount<'info>,
+    #[account(mut, associated_token::mint = mint, associated_token::authority = reserve_authority, associated_token::token_program = token_program)] pub reserve_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(mut, associated_token::mint = mint, associated_token::authority = operating_authority, associated_token::token_program = token_program)] pub operating_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(mut, token::mint = mint, token::authority = owner, token::token_program = token_program)] pub owner_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(init, payer = owner, space = Receipt::LEN, seeds = [b"receipt", vault.key().as_ref(), &expected_sequence.to_le_bytes()], bump)] pub receipt: Account<'info, Receipt>,
+    pub system_program: Program<'info, System>,
+}
 
 #[derive(Accounts)]
 #[instruction(expected_sequence: u64)]
-pub struct RecoverAll<'info> { #[account(mut)] pub owner: Signer<'info>, pub mint: InterfaceAccount<'info, Mint>, pub token_program: Interface<'info, TokenInterface>, #[account(mut, seeds = [b"commit", vault.owner.as_ref()], bump = vault.vault_bump, constraint = vault.mint == mint.key() @ CommitError::WrongMint, constraint = vault.token_program == token_program.key() @ CommitError::WrongTokenProgram)] pub vault: Account<'info, Vault>, #[account(seeds = [b"reserve", vault.key().as_ref()], bump = vault.reserve_authority_bump)] pub reserve_authority: UncheckedAccount<'info>, #[account(seeds = [b"operating", vault.key().as_ref()], bump = vault.operating_authority_bump)] pub operating_authority: UncheckedAccount<'info>, #[account(mut, associated_token::mint = mint, associated_token::authority = reserve_authority, associated_token::token_program = token_program)] pub reserve_token_account: InterfaceAccount<'info, TokenAccount>, #[account(mut, associated_token::mint = mint, associated_token::authority = operating_authority, associated_token::token_program = token_program)] pub operating_token_account: InterfaceAccount<'info, TokenAccount>, #[account(mut, token::mint = mint, token::authority = owner, token::token_program = token_program)] pub owner_token_account: InterfaceAccount<'info, TokenAccount>, #[account(init, payer = owner, space = Receipt::LEN, seeds = [b"receipt", vault.key().as_ref(), &expected_sequence.to_le_bytes()], bump)] pub receipt: Account<'info, Receipt>, pub system_program: Program<'info, System> }
+pub struct RecoverAll<'info> {
+    #[account(mut)] pub owner: Signer<'info>,
+    pub mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
+    #[account(mut, seeds = [b"commit", vault.owner.as_ref()], bump = vault.vault_bump, constraint = vault.mint == mint.key() @ CommitError::WrongMint, constraint = vault.token_program == token_program.key() @ CommitError::WrongTokenProgram)] pub vault: Box<Account<'info, Vault>>,
+    /// CHECK: This PDA is constrained by its stored reserve bump and is only used as an ATA authority.
+    #[account(seeds = [b"reserve", vault.key().as_ref()], bump = vault.reserve_authority_bump)] pub reserve_authority: UncheckedAccount<'info>,
+    /// CHECK: This PDA is constrained by its stored operating bump and is only used as an ATA authority.
+    #[account(seeds = [b"operating", vault.key().as_ref()], bump = vault.operating_authority_bump)] pub operating_authority: UncheckedAccount<'info>,
+    #[account(mut, associated_token::mint = mint, associated_token::authority = reserve_authority, associated_token::token_program = token_program)] pub reserve_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(mut, associated_token::mint = mint, associated_token::authority = operating_authority, associated_token::token_program = token_program)] pub operating_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(mut, token::mint = mint, token::authority = owner, token::token_program = token_program)] pub owner_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(init, payer = owner, space = Receipt::LEN, seeds = [b"receipt", vault.key().as_ref(), &expected_sequence.to_le_bytes()], bump)] pub receipt: Account<'info, Receipt>,
+    pub system_program: Program<'info, System>,
+}
 
 #[account]
 pub struct Vault { pub schema_version: u16, pub program_version: u16, pub deployment_domain: [u8; 32], pub owner: Pubkey, pub executor: Pubkey, pub recipient: Pubkey, pub mint: Pubkey, pub token_program: Pubkey, pub policy_version: u64, pub next_sequence: u64, pub paused: bool, pub executor_enabled: bool, pub reserve_bps: u16, pub daily_limit_raw: u64, pub period_id: i64, pub period_spent_raw: u64, pub reserved_raw: u64, pub operating_raw: u64, pub decimals: u8, pub vault_bump: u8, pub reserve_authority_bump: u8, pub operating_authority_bump: u8, pub reserved: [u8; 244] }

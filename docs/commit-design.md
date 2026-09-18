@@ -35,6 +35,6 @@ CARGO_HOME=/mnt/c/Users/alexa/.cargo anchor build
 solana-test-validator --reset
 ```
 
-In a second shell, deploy the generated `target/deploy/banked_commit.so` to the validator using an isolated test keypair. Set `BANKED_COMMIT_PROGRAM_ID` and the validator genesis hash only after deployment succeeds. Then run the integration suite that proves deposits, allowed payment, overspend rejection, reserve-account rejection, stale sequence rejection, executor revocation, and owner recovery.
+In a second shell, deploy the generated `target/deploy/banked_commit.so` to the validator using an isolated test keypair. Set `BANKED_COMMIT_PROGRAM_ID`, `BANKED_COMMIT_GENESIS_HASH`, and `BANKED_COMMIT_RPC_URL=http://127.0.0.1:8899` only after deployment succeeds. The dedicated Commit RPC leaves the exit-rule RPC unchanged. Then run the integration suite that proves deposits, allowed payment, overspend rejection, reserve-account rejection, stale sequence rejection, executor revocation, and owner recovery.
 
 No mainnet deployment, real stock transfer, creator-fee claim, USDC conversion, or Pyth-dependent behavior is included in this milestone.
