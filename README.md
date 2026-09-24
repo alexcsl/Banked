@@ -1,5 +1,7 @@
 # Banked
 
+Try the [public simulation demo](https://banked-ruby.vercel.app/). It does not execute live trades.
+
 Banked helps Solana traders keep a chosen SOL balance in their wallet and route only the excess through an exit plan. If the wallet holds less than the amount to keep, the rule proposes no sale. Rules start paused, and every live sale and destination purchase requires the trader's wallet approval.
 
 After a sale, Banked allocates the actual USDC proceeds across SPYx, JUP, and USDC kept in the wallet. Its dashboard shows what was routed, what still needs approval, and what was planned to remain. The application defaults to simulation mode; live execution is gated while wallet signing and reconciliation are validated. See the [short and long product descriptions](docs/product-description.md) for reusable copy.
