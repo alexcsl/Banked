@@ -11,8 +11,9 @@ describe("external exit detection", () => {
       blockTime: 1_789_000_000,
       meta: {
         err: null,
+        fee: 5_000,
         preBalances: [2_000_000_000],
-        postBalances: [1_000_000_000],
+        postBalances: [999_995_000],
         preTokenBalances: [],
         postTokenBalances: [{ accountIndex: 1, mint: USDC_MINT, owner: wallet, uiTokenAmount: { amount: "500000000" } }],
       },
@@ -26,6 +27,21 @@ describe("external exit detection", () => {
       slot: 42,
       blockTime: null,
       meta: { err: null, preBalances: [1_000_000_000], postBalances: [2_000_000_000], preTokenBalances: [], postTokenBalances: [] },
+      transaction: { message: { staticAccountKeys: [{ toBase58: () => wallet }] } },
+    }, wallet, "signature");
+    expect(exit).toBeNull();
+  });
+
+  it("does not mistake a fee-only SOL change for an exit", () => {
+    const exit = detectSolToUsdcExit({
+      slot: 42,
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [1_000_000_000],
+        postBalances: [999_995_000],
+        postTokenBalances: [{ accountIndex: 1, mint: USDC_MINT, owner: wallet, uiTokenAmount: { amount: "500000000" } }],
+      },
       transaction: { message: { staticAccountKeys: [{ toBase58: () => wallet }] } },
     }, wallet, "signature");
     expect(exit).toBeNull();

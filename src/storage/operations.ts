@@ -1,5 +1,5 @@
 import type { BankedOperation } from "@/domain/operation";
-import { createExitRule, reconcileRuleSale, type RuleOperation } from "@/domain/rules";
+import { createExitRule, reconcileRuleSale, type ExitRule, type RuleOperation } from "@/domain/rules";
 
 const storageKey = "banked:operations:v1";
 const ruleStorageKey = "banked:rules:v1";
@@ -54,17 +54,22 @@ export function migrateLegacyOperation(candidate: BankedOperation): RuleOperatio
   };
 }
 
-export function loadRules(): ReturnType<typeof createExitRule>[] {
+export function loadRules(): ExitRule[] {
   if (typeof window === "undefined") return [];
   try {
     const value = window.localStorage.getItem(ruleStorageKey);
-    return value ? JSON.parse(value) as ReturnType<typeof createExitRule>[] : [];
+    if (!value) return [];
+    return (JSON.parse(value) as ExitRule[]).map((rule) => ({
+      ...rule,
+      solToKeepLamports: typeof rule.solToKeepLamports === "string" && /^\d+$/.test(rule.solToKeepLamports) ? rule.solToKeepLamports : null,
+      status: typeof rule.solToKeepLamports === "string" && /^\d+$/.test(rule.solToKeepLamports) && rule.status === "active" ? "active" as const : "paused" as const,
+    }));
   } catch {
     return [];
   }
 }
 
-export function saveRule(rule: ReturnType<typeof createExitRule>): void {
+export function saveRule(rule: ExitRule): void {
   const rules = loadRules();
   const index = rules.findIndex((candidate) => candidate.id === rule.id);
   if (index >= 0) rules[index] = rule;

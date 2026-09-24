@@ -2,12 +2,16 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getPurchaseAsset, type PurchaseDestinationId, SOL_MINT, USDC_MINT } from "@/domain/assets";
 import { inspectTransaction } from "@/server/transaction-inspection";
+import { PublicKey } from "@solana/web3.js";
+import { calculateExcessSol } from "@/domain/rules";
+import { getRpcConnection } from "@/server/solana";
 
 const requestSchema = z.object({
   stage: z.enum(["sale", "purchase"]),
   destinationId: z.enum(["spyx", "jup"]).optional(),
   taker: z.string().min(32).max(44),
   amount: z.string().regex(/^\d+$/).refine((value) => BigInt(value) > 0n),
+  solToKeepLamports: z.string().regex(/^\d+$/).optional(),
 });
 
 export async function POST(request: Request) {
@@ -21,6 +25,16 @@ export async function POST(request: Request) {
   const { stage, taker, amount } = parsed.data;
   if (stage === "purchase" && !parsed.data.destinationId) {
     return NextResponse.json({ error: "A purchase destination is required." }, { status: 400 });
+  }
+  if (stage === "sale") {
+    if (parsed.data.solToKeepLamports === undefined) return NextResponse.json({ error: "Set the SOL balance to keep before preparing a sale." }, { status: 400 });
+    try {
+      const balance = BigInt(await getRpcConnection().getBalance(new PublicKey(taker), "confirmed"));
+      const excess = calculateExcessSol(balance, BigInt(parsed.data.solToKeepLamports));
+      if (BigInt(amount) > excess) return NextResponse.json({ error: "Wallet balance no longer has that much SOL above your trade balance. Refresh and review again." }, { status: 409 });
+    } catch {
+      return NextResponse.json({ error: "The wallet balance could not be verified." }, { status: 503 });
+    }
   }
   const destination = stage === "purchase" ? getPurchaseAsset(parsed.data.destinationId as PurchaseDestinationId) : null;
   const params = new URLSearchParams({

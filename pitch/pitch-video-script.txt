@@ -1,0 +1,43 @@
+BANKED PITCH VIDEO SCRIPT
+Target: about 3 minutes across 9 slides. Lines marked ON SCREEN are cues, not spoken words.
+
+SLIDE 1 - THE PROBLEM
+ON SCREEN: Show the cycle from a win to a larger position and another risk.
+SAY: "I know this pattern because I have lived it. I win a trade, feel ready to size up, and put the gain at risk again. As my position grew, my discipline did not grow with it. Banked starts at that moment: after a win, before the next impulsive decision. Research on US stock accounts found that the most active households underperformed the market. That study is not proof that Banked fixes the problem, but it shows why trading behavior matters."
+
+SLIDE 2 - THE EXAMPLE
+ON SCREEN: Point to 11 SOL, the 10 SOL kept, then the 1 SOL sold and its three USDC shares.
+SAY: "I set a rule to keep 10 SOL in my wallet. At a 9 SOL balance, Banked proposes selling zero. At 11 SOL, the 1 SOL above my target is eligible. In this example, that sale produces about 125 USDC: 20 percent toward SPYx, 20 percent toward JUP, and 60 percent kept as USDC. This is a balance threshold, not profit accounting."
+
+SLIDE 3 - THE RULE
+ON SCREEN: Show the real rule editor and allocation preview.
+SAY: "Before the sale, I set the SOL I want left to trade and choose the split. The rule starts paused, so incoming SOL stays under my control. I activate it when ready, then review each proposed sale. This screen is the working simulation."
+
+SLIDE 4 - THE DASHBOARD
+ON SCREEN: Point to SPYx routed, JUP awaiting purchase, and USDC planned to keep.
+SAY: "After the sale, I can see what I actually followed through on. Here, SPYx is recorded as completed. JUP is still waiting. The dashboard keeps that unfinished decision visible. It summarizes saved receipts, not my entire wallet balance."
+
+SLIDE 5 - WHY THIS MATTERS
+ON SCREEN: Pause on the founder line.
+SAY: "I built this around a failure I understand personally. When a trade gets bigger, the pressure changes. A rule does not make me a better trader overnight. It gives the proceeds a plan and shows whether I followed it."
+
+SLIDE 6 - WHY SOLANA
+ON SCREEN: Follow SOL to USDC to SPYx or JUP.
+SAY: "This belongs on Solana because the source asset, USDC, and tokenized stock exposure can live in one wallet. A live version can use the USDC actually received and show a receipt for each wallet-approved step. Tokenized stocks are already live on Solana. Our mainnet execution path still needs validation before it is ready for users."
+
+SLIDE 7 - POTENTIAL MARKET
+ON SCREEN: Point to the 190,000-plus holder figure and the first-customer description.
+SAY: "We start with SOL traders who also want to put part of a realized win into tokenized stocks. Solana reported more than 190,000 xStocks holders in August 2026. That is an adjacent audience, not a count of Banked customers. Two percent conversion would mean 3,800 paying users, but we have to test who actually wants this and who we can reach."
+
+SLIDE 8 - BUSINESS MODEL
+ON SCREEN: Point to Free, then Pro, then the illustrative revenue math.
+SAY: "Planning and basic receipts stay free. Once live monitoring and alerts are built, we would test an eight-dollar monthly Pro subscription. I prefer subscriptions to trading fees because Banked should not make more money when users trade more. At 3,800 subscribers, that would be 30,400 dollars of monthly revenue. With the cost assumptions on the slide, it could produce 6,600 dollars before customer acquisition and taxes. This is a model to validate, not current profit."
+
+SLIDE 9 - TRANSITION TO DEMO
+ON SCREEN: Keep this slide up for the first sentence, then switch to the website.
+SAY: "The idea is simple: turn one win into a decision made in advance, then make every unfinished step visible. Here is the working simulation. I will set a rule, record a one-SOL exit, complete SPYx, and show that JUP is still waiting."
+
+SOURCE NOTES FOR THE VIDEO DESCRIPTION
+Barber and Odean, Trading Is Hazardous to Your Wealth (2000): https://faculty.haas.berkeley.edu/odean/Papers%20current%20versions/Individual_Investor_Performance_Final.pdf
+Solana Foundation, xStocks case study: https://solana.com/id/news/case-study-xstocks
+Solana Foundation, August 2026 ecosystem roundup: https://solana.com/news/solana-ecosystem-roundup-august-2026

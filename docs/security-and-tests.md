@@ -13,4 +13,4 @@ Critical invariants:
 
 Current automated coverage validates integer parsing, rounding conservation, and allocation limits. A live readiness spike must add versioned-transaction fixtures, fee-side accounting cases, Token-2022 compatibility tests, refresh/retry recovery tests, and a permitted real-wallet reconciliation test.
 
-Commit has separate native Rust and TypeScript accounting coverage. It is designed to reject stale sequences, stale policies, expired executor requests, overspending, wrong recipient accounts, and reserve-account payment attempts. SBF compilation and local-validator adversarial transactions remain required before treating its policy as live authority.
+The dashboard counts a purchase as routed only when a recorded USDC debit exists. Simulation purchases record their budget as a synthetic debit. Older completed receipts without a debit appear as unverified. The dashboard does not represent the user's current wallet balance.

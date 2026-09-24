@@ -2,9 +2,9 @@
 
 ## Product decision
 
-Banked is an exit-rule product for xStocks, not a general trading terminal or background wallet manager. A user commits an allocation before selling SOL through Banked. After the sale finalizes, Banked calculates from actual USDC received and prepares the opted-in SPYx purchase. The user signs both transactions.
+Banked is an exit-rule product. A user sets an allocation before selling SOL through Banked. After the sale finalizes, Banked calculates from actual USDC received and prepares the opted-in SPYx and JUP purchases. The user signs each transaction separately. A saved receipt and dashboard show which purchase debits were recorded and which budgets still need action.
 
-The pitch earns attention when the demo proves the pre-commitment, actual-output calculation, spendable retained-USDC balance, and recovery after interruption. It is weak when described only as a two-token swap or as automatic trading. The remaining product risk is whether active traders will leave their existing terminal for a deliberate exit flow. Validate that with target-user conversations before treating it as a broad consumer product.
+The pitch earns attention when the demo shows a rule before the exit, a clear allocation from proceeds, independent purchases, and recovery after interruption. The dashboard's retained-USDC figure is a plan, not a current wallet balance. The remaining product risk is whether active traders will use a deliberate exit flow and return to finish the plan. Validate that with target-user conversations before treating it as a broad consumer product.
 
 Implemented:
 
@@ -13,6 +13,8 @@ Implemented:
 - Integer allocation math and fixture receipt
 - Read-only Jupiter USDC-to-SPYx quote proxy
 - Local operation-state machine and recovery storage
+- Receipt-based money-flow dashboard with routed, awaiting, and retained-plan amounts
+- Reviewable import of recent finalized SOL-to-USDC exit candidates
 - Wallet-bound live-order preparation endpoint, protected by an explicit server-side gate
 - Phantom detection and connection flow
 - Fixture/live-state disclosure and local setup documentation

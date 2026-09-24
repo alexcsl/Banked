@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { VersionedTransaction } from "@solana/web3.js";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Transaction, VersionedTransaction } from "@solana/web3.js";
 import { allocateRuleProceeds, formatAtomic, parseDecimalToAtomic } from "@/domain/allocation";
 import { getPurchaseAsset, type PurchaseDestinationId } from "@/domain/assets";
-import { createExitRule, createRuleOperation, exitRuleTemplates, reconcileRuleSale, summarizeRuleOperations, updatePurchase, type ExitRule, type RuleOperation } from "@/domain/rules";
+import { calculateExcessSol, createExitRule, createRuleOperation, exitRuleTemplates, reconcileRuleSale, summarizeMoneyFlow, summarizeRuleOperations, updatePurchase, type ExitRule, type MoneyFlowSummary, type RuleOperation } from "@/domain/rules";
 import { deleteRule, loadRuleOperations, loadRules, saveRule, saveRuleOperation } from "@/storage/operations";
+import { useWorkspaceMotion } from "@/components/use-workspace-motion";
 
 type Quote = { destinationId: PurchaseDestinationId; expectedOutput: string; minimumOutput: string; feeBps: number; route: string };
 type PreparedOrder = Quote & { requestId: string; transaction: string; stage: "sale" | "purchase"; destinationId?: PurchaseDestinationId | null };
@@ -18,17 +18,22 @@ const fixtureUsdcPerSol = 125_030_864n;
 const lamportsPerSol = 1_000_000_000n;
 
 export function CuratedRuleFlow() {
-  const [saleAmount, setSaleAmount] = useState("1");
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const [solToKeep, setSolToKeep] = useState("10");
+  const [simulatedWalletSol, setSimulatedWalletSol] = useState("11");
+  const [walletBalanceLamports, setWalletBalanceLamports] = useState<string | null>(null);
+  const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null);
   const [ruleName, setRuleName] = useState("De-risk SOL rally");
   const [spyxBps, setSpyxBps] = useState(20);
   const [jupBps, setJupBps] = useState(20);
   const [mode, setMode] = useState<"fixture" | "live">("fixture");
   const [wallet, setWallet] = useState<string | null>(null);
-  const [message, setMessage] = useState("Create an exit rule, then review its receipt before enabling live execution.");
+  const [message, setMessage] = useState("Set the SOL balance you want to keep trading with. Save the rule, then activate it when ready.");
   const [rules, setRules] = useState<ExitRule[]>([]);
   const [history, setHistory] = useState<RuleOperation[]>([]);
   const [operation, setOperation] = useState<RuleOperation | null>(null);
   const [preparedSale, setPreparedSale] = useState<PreparedOrder | null>(null);
+  const [preparedSaleAmount, setPreparedSaleAmount] = useState<bigint | null>(null);
   const [preparedPurchases, setPreparedPurchases] = useState<Partial<Record<PurchaseDestinationId, PreparedOrder>>>({});
   const [quotes, setQuotes] = useState<Partial<Record<PurchaseDestinationId, Quote>>>({});
   const [detectedExits, setDetectedExits] = useState<DetectedExit[]>([]);
@@ -42,16 +47,27 @@ export function CuratedRuleFlow() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  const fixtureProceeds = useMemo(() => {
+  const simulatedExcess = (() => {
     try {
-      return (parseDecimalToAtomic(saleAmount, 9) * fixtureUsdcPerSol) / lamportsPerSol;
+      return calculateExcessSol(parseDecimalToAtomic(simulatedWalletSol, 9), parseDecimalToAtomic(solToKeep, 9));
     } catch {
       return 0n;
     }
-  }, [saleAmount]);
-  const formAllocation = useMemo(() => allocateRuleProceeds(fixtureProceeds, { spyxBps, jupBps }), [fixtureProceeds, spyxBps, jupBps]);
+  })();
+  const fixtureProceeds = (simulatedExcess * fixtureUsdcPerSol) / lamportsPerSol;
+  const selectedRule = rules.find((rule) => rule.id === selectedRuleId);
+  const liveExcess = (() => {
+    if (!walletBalanceLamports) return 0n;
+    try { return calculateExcessSol(BigInt(walletBalanceLamports), parseDecimalToAtomic(solToKeep, 9)); }
+    catch { return 0n; }
+  })();
+  const formAllocation = useMemo(() => allocateRuleProceeds(mode === "fixture" ? fixtureProceeds : (liveExcess * fixtureUsdcPerSol) / lamportsPerSol, { spyxBps, jupBps }), [fixtureProceeds, liveExcess, mode, spyxBps, jupBps]);
   const activeAllocation = useMemo(() => operation?.actualProceeds ? allocateRuleProceeds(BigInt(operation.actualProceeds), { spyxBps: operation.rule.spyxBps, jupBps: operation.rule.jupBps }) : formAllocation, [formAllocation, operation]);
+  const visibleHistory = useMemo(() => history.filter((item) => mode === "fixture" ? item.wallet === "fixture" : Boolean(wallet) && item.wallet === wallet), [history, mode, wallet]);
   const discipline = useMemo(() => summarizeRuleOperations(history), [history]);
+  const moneyFlow = useMemo(() => summarizeMoneyFlow(visibleHistory), [visibleHistory]);
+  const totalsKey = `${moneyFlow.proceeds}:${moneyFlow.routedSpyx}:${moneyFlow.routedJup}:${moneyFlow.awaitingAction}:${moneyFlow.plannedRetained}`;
+  useWorkspaceMotion(workspaceRef, totalsKey, operation ? `${operation.id}:${operation.saleStatus}` : "");
 
   function persistOperation(next: RuleOperation) {
     saveRuleOperation(next);
@@ -61,9 +77,9 @@ export function CuratedRuleFlow() {
 
   function buildRule(existing?: ExitRule): ExitRule | null {
     try {
-      const next = createExitRule(ruleName, { spyxBps, jupBps });
+      const next = createExitRule(ruleName, { spyxBps, jupBps }, undefined, solToKeep);
       if (!existing) return next;
-      return { ...next, id: existing.id, createdAt: existing.createdAt };
+      return { ...next, id: existing.id, createdAt: existing.createdAt, status: "paused" };
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "The rule is invalid.");
       return null;
@@ -81,22 +97,50 @@ export function CuratedRuleFlow() {
     else setJupBps(value);
   }
 
-  function saveCurrentRule(existing?: ExitRule) {
+  function saveCurrentRule() {
+    const existing = rules.find((rule) => rule.id === selectedRuleId);
+    if (existing?.status === "active") {
+      setMessage("Pause this rule before editing it.");
+      return;
+    }
     const rule = buildRule(existing);
     if (!rule) return;
     saveRule(rule);
     setRules(loadRules());
-    setMessage(`Saved ${rule.name}.`);
+    setSelectedRuleId(rule.id);
+    setPreparedSale(null);
+    setPreparedSaleAmount(null);
+    setMessage(`Saved ${rule.name} as paused. Incoming SOL stays under your control.`);
+  }
+
+  function toggleRule(rule: ExitRule) {
+    const next = { ...rule, status: rule.status === "active" ? "paused" as const : "active" as const, updatedAt: new Date().toISOString() };
+    if (next.status === "active" && !next.solToKeepLamports) {
+      setMessage("Set and save a SOL balance to keep before activating this rule.");
+      return;
+    }
+    saveRule(next);
+    setRules(loadRules());
+    setPreparedSale(null);
+    setPreparedSaleAmount(null);
+    setMessage(next.status === "paused" ? `${next.name} paused. Incoming SOL stays under your control.` : `${next.name} active. Review and sign each excess sale yourself.`);
   }
 
   function selectRule(rule: ExitRule) {
+    setPreparedSale(null);
+    setPreparedSaleAmount(null);
     setRuleName(rule.name);
+    setSolToKeep(rule.solToKeepLamports === null ? "" : formatAtomic(BigInt(rule.solToKeepLamports), 9));
     setSpyxBps(rule.spyxBps);
     setJupBps(rule.jupBps);
+    setSelectedRuleId(rule.id);
     setMessage(`Loaded ${rule.name}.`);
   }
 
   function applyTemplate(template: (typeof exitRuleTemplates)[number]) {
+    setSelectedRuleId(null);
+    setPreparedSale(null);
+    setPreparedSaleAmount(null);
     setRuleName(template.name);
     setSpyxBps(template.spyxBps);
     setJupBps(template.jupBps);
@@ -104,7 +148,7 @@ export function CuratedRuleFlow() {
   }
 
   function duplicateRule(rule: ExitRule) {
-    const copy = createExitRule(`${rule.name} copy`, { spyxBps: rule.spyxBps, jupBps: rule.jupBps });
+    const copy = createExitRule(`${rule.name} copy`, { spyxBps: rule.spyxBps, jupBps: rule.jupBps }, undefined, rule.solToKeepLamports === null ? undefined : formatAtomic(BigInt(rule.solToKeepLamports), 9));
     saveRule(copy);
     setRules(loadRules());
     setMessage(`Saved ${copy.name}.`);
@@ -118,7 +162,23 @@ export function CuratedRuleFlow() {
     }
     const result = await provider.connect();
     setWallet(result.publicKey.toBase58());
-    setMessage("Wallet connected. Every live purchase still requires your approval.");
+    setWalletBalanceLamports(null);
+    setMessage("Wallet connected. Refresh its SOL balance before reviewing an excess sale.");
+  }
+
+  async function refreshWalletBalance(address = wallet): Promise<bigint | null> {
+    if (!address) { setMessage("Connect a wallet to read its SOL balance."); return null; }
+    try {
+      const response = await fetch(`/api/wallet/balance?wallet=${encodeURIComponent(address)}`, { cache: "no-store" });
+      const result = await response.json() as { balanceLamports?: string; error?: string };
+      if (!response.ok || !result.balanceLamports) throw new Error(result.error ?? "Wallet balance unavailable.");
+      setWalletBalanceLamports(result.balanceLamports);
+      return BigInt(result.balanceLamports);
+    } catch (error) {
+      setWalletBalanceLamports(null);
+      setMessage(error instanceof Error ? error.message : "Wallet balance unavailable.");
+      return null;
+    }
   }
 
   async function loadQuote(destinationId: PurchaseDestinationId) {
@@ -166,7 +226,7 @@ export function CuratedRuleFlow() {
       setMessage("This exit is already in Banked history.");
       return;
     }
-    const rule = buildRule();
+    const rule = executableRule();
     if (!rule) return;
     const imported = reconcileRuleSale(createRuleOperation(rule, wallet), BigInt(exit.usdcReceived));
     persistOperation({ ...imported, saleSignature: exit.signature, saleSource: "detected" });
@@ -175,10 +235,31 @@ export function CuratedRuleFlow() {
   }
 
   function recordFixtureSale() {
-    const rule = buildRule();
+    const rule = executableRule();
     if (!rule) return;
+    if (simulatedExcess === 0n) {
+      setMessage("No SOL is above your trade balance. Nothing to sell or route.");
+      return;
+    }
     persistOperation(reconcileRuleSale(createRuleOperation(rule, "fixture"), fixtureProceeds));
-    setMessage("Fixture sale recorded. Each eligible destination can now be recorded independently.");
+    setMessage(`${formatAtomic(simulatedExcess, 9, 4)} SOL above your trade balance was simulated as sold. Your trade balance stays untouched.`);
+  }
+
+  function executableRule(): ExitRule | null {
+    if (!selectedRule || selectedRule.status !== "active") {
+      setMessage("Save and activate a rule before applying it. Paused rules leave incoming SOL untouched.");
+      return null;
+    }
+    if (selectedRule.name !== ruleName || selectedRule.spyxBps !== spyxBps || selectedRule.jupBps !== jupBps || selectedRule.solToKeepLamports !== parseSolToKeep()) {
+      setMessage("Save your changes before applying this rule.");
+      return null;
+    }
+    return selectedRule;
+  }
+
+  function parseSolToKeep(): string | null {
+    try { return parseDecimalToAtomic(solToKeep, 9).toString(); }
+    catch { return null; }
   }
 
   async function prepareLiveSale() {
@@ -186,16 +267,16 @@ export function CuratedRuleFlow() {
       setMessage("Connect Phantom before preparing a live sale.");
       return;
     }
-    const rule = buildRule();
+    const rule = executableRule();
     if (!rule) return;
-    let amount: bigint;
-    try {
-      amount = parseDecimalToAtomic(saleAmount, 9);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Enter a valid SOL amount.");
+    const balance = await refreshWalletBalance();
+    if (balance === null) return;
+    const amount = calculateExcessSol(balance, BigInt(rule.solToKeepLamports!));
+    if (amount === 0n) {
+      setMessage("No SOL is above your trade balance. Nothing to sell.");
       return;
     }
-    const response = await fetch("/api/order", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage: "sale", taker: wallet, amount: amount.toString() }) });
+    const response = await fetch("/api/order", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage: "sale", taker: wallet, amount: amount.toString(), solToKeepLamports: rule.solToKeepLamports }) });
     const result = await response.json() as PreparedOrder & { error?: string };
     if (!response.ok) {
       setMessage(result.error ?? "A live sale could not be prepared.");
@@ -203,12 +284,23 @@ export function CuratedRuleFlow() {
     }
     persistOperation(createRuleOperation(rule, wallet));
     setPreparedSale(result);
+    setPreparedSaleAmount(amount);
     setMessage("Live sale prepared. Review the transaction in Phantom before signing.");
   }
 
   async function signAndSubmitSale() {
     const provider = window.phantom?.solana;
     if (!provider || !preparedSale || !operation || !wallet) return;
+    const rule = executableRule();
+    if (!rule || preparedSaleAmount === null) return;
+    const balance = await refreshWalletBalance();
+    if (balance === null) return;
+    if (calculateExcessSol(balance, BigInt(rule.solToKeepLamports!)) < preparedSaleAmount) {
+      setPreparedSale(null);
+      setPreparedSaleAmount(null);
+      setMessage("Wallet SOL changed. Prepare a new sale from the current excess.");
+      return;
+    }
     try {
       const transaction = VersionedTransaction.deserialize(base64ToBytes(preparedSale.transaction));
       const signed = await provider.signTransaction(transaction);
@@ -235,8 +327,8 @@ export function CuratedRuleFlow() {
   }
 
   async function preparePurchase(destinationId: PurchaseDestinationId) {
-    if (!operation?.actualProceeds || operation.saleStatus !== "finalized" || !wallet) {
-      setMessage("Finalize the sale and connect Phantom before preparing a purchase.");
+    if (!operation?.actualProceeds || operation.saleStatus !== "finalized" || !wallet || wallet !== operation.wallet) {
+      setMessage("Finalize the sale and connect the wallet that owns this operation before preparing a purchase.");
       return;
     }
     const purchase = operation.purchases[destinationId];
@@ -270,8 +362,9 @@ export function CuratedRuleFlow() {
       }
       const reconciliation = await reconcile("purchase", result.signature, destinationId);
       if (reconciliation?.status === "finalized") {
-        persistOperation(updatePurchase(submitted, destinationId, { status: "finalized", signature: result.signature, actualOutput: reconciliation.destinationDelta }));
-        setMessage(`${getPurchaseAsset(destinationId).symbol} purchase finalized.`);
+        const usdcSpent = -BigInt(reconciliation.usdcDelta ?? "0");
+        persistOperation(updatePurchase(submitted, destinationId, { status: "finalized", signature: result.signature, actualOutput: reconciliation.destinationDelta, usdcSpent: usdcSpent.toString() }));
+        setMessage(usdcSpent > BigInt(submitted.purchases[destinationId].budget) ? `${getPurchaseAsset(destinationId).symbol} finalized, but its USDC debit exceeded the saved budget. Review the receipt.` : `${getPurchaseAsset(destinationId).symbol} purchase finalized.`);
       } else {
         persistOperation(updatePurchase(submitted, destinationId, { status: "pending", signature: result.signature }));
         setMessage(`${getPurchaseAsset(destinationId).symbol} purchase submitted and awaiting reconciliation.`);
@@ -286,8 +379,9 @@ export function CuratedRuleFlow() {
     if (!operation || !purchase?.signature || purchase.status !== "pending") return;
     const reconciliation = await reconcile("purchase", purchase.signature, destinationId);
     if (reconciliation?.status === "finalized") {
-      persistOperation(updatePurchase(operation, destinationId, { status: "finalized", actualOutput: reconciliation.destinationDelta }));
-      setMessage(`${getPurchaseAsset(destinationId).symbol} purchase finalized from on-chain balances.`);
+      const usdcSpent = -BigInt(reconciliation.usdcDelta ?? "0");
+      persistOperation(updatePurchase(operation, destinationId, { status: "finalized", actualOutput: reconciliation.destinationDelta, usdcSpent: usdcSpent.toString() }));
+      setMessage(usdcSpent > BigInt(purchase.budget) ? `${getPurchaseAsset(destinationId).symbol} finalized, but its USDC debit exceeded the saved budget. Review the receipt.` : `${getPurchaseAsset(destinationId).symbol} purchase finalized from on-chain balances.`);
       return;
     }
     if (reconciliation?.status === "failed") {
@@ -299,13 +393,13 @@ export function CuratedRuleFlow() {
   }
 
   function recordFixturePurchase(destinationId: PurchaseDestinationId) {
-    if (!operation) return;
-    persistOperation(updatePurchase(operation, destinationId, { status: "finalized", actualOutput: "fixture" }));
+    if (!operation || operation.wallet !== "fixture") return;
+    persistOperation(updatePurchase(operation, destinationId, { status: "finalized", actualOutput: "fixture", usdcSpent: operation.purchases[destinationId].budget }));
     setMessage(`${getPurchaseAsset(destinationId).symbol} fixture purchase recorded.`);
   }
 
   async function reconcile(stage: "sale" | "purchase", signature: string, destinationId?: PurchaseDestinationId): Promise<Reconciliation | null> {
-    const response = await fetch("/api/reconcile", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage, destinationId, wallet, signature }) });
+    const response = await fetch("/api/reconcile", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage, destinationId, wallet: operation?.wallet ?? wallet, signature }) });
     return response.ok ? response.json() as Promise<Reconciliation> : null;
   }
 
@@ -326,26 +420,28 @@ export function CuratedRuleFlow() {
     URL.revokeObjectURL(url);
   }
 
-  return <div className="workspace">
-    <header className="workspace-header"><a className="wordmark" href="#rule">Banked</a><div className="workspace-meta"><Link className="link-button" href="/commit">Commit vault</Link><span>{mode === "fixture" ? "Simulation mode" : "Mainnet execution"}</span><span>Solana</span><button className="link-button" onClick={() => setMode(mode === "fixture" ? "live" : "fixture")}>Use {mode === "fixture" ? "live mode" : "simulation"}</button><button className="wallet-button" onClick={connectWallet}>{wallet ? `${wallet.slice(0, 4)}...${wallet.slice(-4)}` : "Connect wallet"}</button></div></header>
+  return <div className="workspace" ref={workspaceRef}>
+    <div className="scroll-progress" aria-hidden="true" />
+    <header className="workspace-header"><a className="wordmark" href="#top">Banked</a><nav className="workspace-nav" aria-label="Page sections"><a href="#dashboard">Dashboard</a><a href="#rule">Exit rule</a><a href="#history">History</a></nav><div className="workspace-meta"><span>{mode === "fixture" ? "Simulation mode" : "Mainnet execution"}</span><button className="link-button" onClick={() => setMode(mode === "fixture" ? "live" : "fixture")}>Use {mode === "fixture" ? "live mode" : "simulation"}</button><button className="wallet-button" onClick={connectWallet}>{wallet ? `${wallet.slice(0, 4)}...${wallet.slice(-4)}` : "Connect wallet"}</button></div></header>
     <main>
-      <section className="workspace-intro"><p className="section-kicker">EXIT ALLOCATION</p><h1>Set the rule before you sell.</h1><p>Convert a SOL exit into a planned allocation. Banked calculates from finalized USDC proceeds and requires your approval for every purchase.</p></section>
+      <section className="workspace-intro" id="top"><p className="section-kicker">EXIT DISCIPLINE</p><h1>Keep your trading capital. Route the excess.</h1><p>Choose how much SOL to keep in your wallet. Only the balance above that number is eligible for the exit plan. New rules stay paused until you activate them.</p></section>
+      <MoneyDashboard summary={moneyFlow} mode={mode} />
       <section className="workspace-grid" id="rule">
-        <section className="rule-workbench" aria-labelledby="rule-heading"><div className="section-heading"><p className="section-kicker">01 · DEFINE</p><h2 id="rule-heading">Exit rule</h2><button className="link-button" onClick={() => saveCurrentRule()}>Save rule</button></div><div className="form-stack"><label className="workspace-field" htmlFor="rule-name"><span>Rule name</span><input id="rule-name" value={ruleName} maxLength={60} onChange={(event) => setRuleName(event.target.value)} /></label><label className="workspace-field" htmlFor="sale"><span>SOL to sell</span><div className="amount-input"><input id="sale" inputMode="decimal" value={saleAmount} onChange={(event) => setSaleAmount(event.target.value)} /><strong>SOL</strong></div><small>Simulation uses 1 SOL = 125.030864 USDC.</small></label><AllocationControl id="spyx" value={spyxBps} onChange={changePercentage} /><AllocationControl id="jup" value={jupBps} onChange={changePercentage} /></div><div className="template-list" aria-label="Rule templates"><p className="section-kicker">START WITH A TEMPLATE</p>{exitRuleTemplates.map((template) => <button className="template-row" key={template.id} onClick={() => applyTemplate(template)}><span><strong>{template.name}</strong><small>{template.description}</small></span><span>{template.spyxBps}% SPYx / {template.jupBps}% JUP</span></button>)}</div><section className="detected-exits" aria-labelledby="detected-exits-heading"><div className="section-heading"><div><p className="section-kicker">EXTERNAL EXIT DETECTION</p><h3 id="detected-exits-heading">Apply this rule to a completed exit</h3></div><button className="secondary-action" onClick={scanRecentExits} disabled={scanningExits}>{scanningExits ? "Scanning exits" : "Scan wallet"}</button></div><p>Banked finds finalized SOL-debit and USDC-credit candidates. Review before importing. Importing never sends a transaction.</p>{detectedExits.map((exit) => <div className="detected-exit" key={exit.signature}><span>{formatAtomic(BigInt(exit.solDebited), 9, 4)} SOL to {formatAtomic(BigInt(exit.usdcReceived), 6, 4)} USDC<small>{formatExitTime(exit.blockTime)} · {exit.signature.slice(0, 8)}…{exit.signature.slice(-6)}</small></span><button className="link-button" onClick={() => importDetectedExit(exit)}>Apply rule</button></div>)}</section></section>
-        <aside className="allocation-review" aria-labelledby="allocation-heading"><div className="section-heading"><div><p className="section-kicker">02 · REVIEW</p><h2 id="allocation-heading">Allocation</h2></div><span className="plain-status">{operation?.actualProceeds ? "Finalized proceeds" : "Estimated proceeds"}</span></div><div className="proceeds"><span>{operation?.actualProceeds ? "USDC received" : "Estimated USDC"}</span><strong>{formatAtomic(activeAllocation.proceeds, 6, 6)}</strong></div><dl className="allocation-lines"><AllocationLine label="SPYx" amount={activeAllocation.spyx.budget} note={activeAllocation.spyx.eligible ? "Eligible" : "Below 10 USDC"} /><AllocationLine label="JUP" amount={activeAllocation.jup.budget} note={activeAllocation.jup.eligible ? "Eligible" : "Below 10 USDC"} /><AllocationLine label="Retained USDC" amount={activeAllocation.retainedUsdc} note="Stays spendable" /></dl><ol className="execution-steps"><Step number="01" label="Define rule" active /><Step number="02" label="Confirm proceeds" active={Boolean(operation?.actualProceeds)} /><Step number="03" label="Complete destinations" active={operation?.saleStatus === "finalized"} /></ol><div className="primary-action">{mode === "fixture" ? <button onClick={recordFixtureSale}>Record simulation proceeds</button> : <>{!preparedSale && <button onClick={prepareLiveSale}>Prepare live sale</button>}{preparedSale && operation?.saleStatus === "prepared" && <button onClick={signAndSubmitSale}>Review and sign sale</button>}</>}</div></aside>
+        <section className="rule-workbench" aria-labelledby="rule-heading"><div className="section-heading"><p className="section-kicker">01 · DEFINE</p><h2 id="rule-heading">Exit rule</h2><button className="link-button" onClick={saveCurrentRule} disabled={selectedRule?.status === "active"}>Save rule</button></div><p className="rule-state">{selectedRule ? `Rule ${selectedRule.status}` : "Unsaved rule"}. {selectedRule?.status === "active" ? "Pause before editing. Each live sale still needs your wallet approval." : "Paused rules cannot prepare a sale."}</p><div className="form-stack"><label className="workspace-field" htmlFor="rule-name"><span>Rule name</span><input id="rule-name" value={ruleName} maxLength={60} disabled={selectedRule?.status === "active"} onChange={(event) => setRuleName(event.target.value)} /></label><label className="workspace-field" htmlFor="sol-to-keep"><span>SOL to keep</span><div className="amount-input"><input id="sol-to-keep" inputMode="decimal" value={solToKeep} disabled={selectedRule?.status === "active"} onChange={(event) => setSolToKeep(event.target.value)} /><strong>SOL</strong></div><small>Banked proposes selling only the SOL above this amount.</small></label>{mode === "fixture" ? <label className="workspace-field" htmlFor="simulated-wallet-sol"><span>Wallet SOL balance (simulation)</span><div className="amount-input"><input id="simulated-wallet-sol" inputMode="decimal" value={simulatedWalletSol} onChange={(event) => setSimulatedWalletSol(event.target.value)} /><strong>SOL</strong></div><small>With 10 SOL to keep: 9 in wallet sells 0; 11 sells 1.</small></label> : <div className="workspace-field"><span>Current wallet SOL</span><strong>{walletBalanceLamports === null ? "Refresh to check" : `${formatAtomic(BigInt(walletBalanceLamports), 9, 6)} SOL`}</strong><button className="secondary-action" onClick={() => refreshWalletBalance()}>Refresh balance</button><small>Banked checks when you refresh or prepare a sale. It does not sell automatically.</small></div>}<AllocationControl id="spyx" value={spyxBps} onChange={changePercentage} disabled={selectedRule?.status === "active"} /><AllocationControl id="jup" value={jupBps} onChange={changePercentage} disabled={selectedRule?.status === "active"} /></div><div className="template-list" aria-label="Rule templates"><p className="section-kicker">START WITH A TEMPLATE</p>{exitRuleTemplates.map((template) => <button className="template-row" key={template.id} onClick={() => applyTemplate(template)}><span><strong>{template.name}</strong><small>{template.description}</small></span><span>{template.spyxBps}% SPYx / {template.jupBps}% JUP</span></button>)}</div><section className="detected-exits" aria-labelledby="detected-exits-heading"><div className="section-heading"><div><p className="section-kicker">EXTERNAL EXIT DETECTION</p><h3 id="detected-exits-heading">Apply this rule to a completed exit</h3></div><button className="secondary-action" onClick={scanRecentExits} disabled={scanningExits}>{scanningExits ? "Scanning exits" : "Scan wallet"}</button></div><p>Banked finds finalized SOL-debit and USDC-credit candidates. Review before importing. Importing never sends a transaction.</p>{detectedExits.map((exit) => <div className="detected-exit" key={exit.signature}><span>{formatAtomic(BigInt(exit.solDebited), 9, 4)} SOL to {formatAtomic(BigInt(exit.usdcReceived), 6, 4)} USDC<small>{formatExitTime(exit.blockTime)} · {exit.signature.slice(0, 8)}…{exit.signature.slice(-6)}</small></span><button className="link-button" onClick={() => importDetectedExit(exit)}>Apply rule</button></div>)}</section></section>
+        <aside className="allocation-review" aria-labelledby="allocation-heading"><div className="section-heading"><div><p className="section-kicker">02 · REVIEW</p><h2 id="allocation-heading">Allocation</h2></div><span className="plain-status">{operation?.actualProceeds ? "Finalized proceeds" : "Estimated proceeds"}</span></div><div className="proceeds"><span>{operation?.actualProceeds ? "USDC received" : "Estimated USDC"}</span><strong>{formatAtomic(activeAllocation.proceeds, 6, 6)}</strong></div><p className="rule-state">{mode === "fixture" ? formatAtomic(simulatedExcess, 9, 6) : formatAtomic(liveExcess, 9, 6)} SOL above your keep amount. Simulation uses 1 SOL = 125.030864 USDC.</p><dl className="allocation-lines"><AllocationLine label="SPYx" amount={activeAllocation.spyx.budget} note={activeAllocation.spyx.eligible ? "Eligible" : "Below 10 USDC"} /><AllocationLine label="JUP" amount={activeAllocation.jup.budget} note={activeAllocation.jup.eligible ? "Eligible" : "Below 10 USDC"} /><AllocationLine label="Retained USDC" amount={activeAllocation.retainedUsdc} note="Stays spendable" /></dl><ol className="execution-steps"><Step number="01" label="Save and activate rule" active={selectedRule?.status === "active"} /><Step number="02" label="Confirm proceeds" active={Boolean(operation?.actualProceeds)} /><Step number="03" label="Complete destinations" active={operation?.saleStatus === "finalized"} /></ol><div className="primary-action">{selectedRule && <button className="secondary-action" onClick={() => toggleRule(selectedRule)}>{selectedRule.status === "active" ? "Pause rule" : "Activate rule"}</button>}{mode === "fixture" ? <button onClick={recordFixtureSale} disabled={selectedRule?.status !== "active" || simulatedExcess === 0n}>Record simulation proceeds</button> : <>{!preparedSale && <button onClick={prepareLiveSale} disabled={selectedRule?.status !== "active"}>Prepare live sale</button>}{preparedSale && operation?.saleStatus === "prepared" && <button onClick={signAndSubmitSale} disabled={selectedRule?.status !== "active"}>Review and sign sale</button>}</>}</div></aside>
       </section>
-      {operation?.saleStatus === "finalized" && <section className="destination-section" aria-labelledby="destinations-heading"><div className="section-heading"><div><p className="section-kicker">03 · COMPLETE</p><h2 id="destinations-heading">Finish eligible destinations</h2></div><p>Each destination is independent. A delayed purchase never locks retained USDC.</p></div><div className="destination-grid">{(["spyx", "jup"] as PurchaseDestinationId[]).map((destinationId) => <PurchaseCard key={destinationId} destinationId={destinationId} operation={operation} quote={quotes[destinationId]} mode={mode} onQuote={loadQuote} onFixture={recordFixturePurchase} onPrepare={preparePurchase} onSign={signAndSubmitPurchase} onRecover={reconcilePendingPurchase} prepared={Boolean(preparedPurchases[destinationId])} />)}</div></section>}
+      {operation?.saleStatus === "finalized" && <section className="destination-section" id="destinations" aria-labelledby="destinations-heading"><div className="section-heading"><div><p className="section-kicker">03 · COMPLETE</p><h2 id="destinations-heading">Finish eligible destinations</h2></div><p>Each destination is independent. A delayed purchase never locks retained USDC.</p></div><div className="destination-grid">{(["spyx", "jup"] as PurchaseDestinationId[]).map((destinationId) => <PurchaseCard key={destinationId} destinationId={destinationId} operation={operation} quote={quotes[destinationId]} mode={operation.wallet === "fixture" ? "fixture" : "live"} onQuote={loadQuote} onFixture={recordFixturePurchase} onPrepare={preparePurchase} onSign={signAndSubmitPurchase} onRecover={reconcilePendingPurchase} prepared={Boolean(preparedPurchases[destinationId])} />)}</div></section>}
       {operation && <section className="receipt-summary"><div><p className="section-kicker">RULE RECEIPT</p><h2>{operation.rule.name}</h2><p>{operation.rule.spyxBps}% SPYx, {operation.rule.jupBps}% JUP, {100 - operation.rule.spyxBps - operation.rule.jupBps}% retained USDC.</p></div><div><button className="secondary-action" onClick={copyReceipt}>Copy receipt</button><button className="secondary-action" onClick={downloadReceipt}>Download JSON</button></div></section>}
-      <details className="secondary-section" open={discipline.pendingPurchases > 0}><summary><span>Discipline and recovery</span><span>{discipline.pendingPurchases > 0 ? `${discipline.pendingPurchases} purchase${discipline.pendingPurchases === 1 ? "" : "s"} need attention` : "View history"}</span></summary><div className="secondary-content"><div className="discipline-metrics"><WorkspaceMetric label="Rules followed" value={`${discipline.completedRules}/${discipline.totalRules}`} /><WorkspaceMetric label="Pending purchases" value={discipline.pendingPurchases.toString()} /><WorkspaceMetric label="Retained across exits" value={`${formatAtomic(discipline.retainedUsdc, 6, 4)} USDC`} /></div><section className="history-block"><h2>Saved rules</h2>{rules.length ? rules.map((rule) => <div className="history-row" key={rule.id}><span>{rule.name}</span><span>{rule.spyxBps}% SPYx / {rule.jupBps}% JUP</span><div><button className="link-button" onClick={() => selectRule(rule)}>Load</button><button className="link-button" onClick={() => duplicateRule(rule)}>Duplicate</button><button className="link-button destructive" onClick={() => { deleteRule(rule.id); setRules(loadRules()); }}>Delete</button></div></div>) : <p>No saved rules yet.</p>}</section><section className="history-block"><h2>Recent operations</h2>{history.length ? history.map((item) => <div className="history-row" key={item.id}><span>{item.rule.name}</span><span>{item.saleStatus}</span><span>{item.actualProceeds ? `${formatAtomic(BigInt(item.actualProceeds), 6, 4)} USDC` : "Awaiting proceeds"}</span>{item.saleStatus === "finalized" && <button className="link-button" onClick={() => { setOperation(item); setMessage(`${item.rule.name} restored. Continue any ready or pending purchase.`); }}>Resume</button>}</div>) : <p>No operations yet.</p>}</section></div></details>
+      <details className="secondary-section" id="history" open={discipline.pendingPurchases > 0}><summary><span>Saved rules and receipts</span><span>{discipline.pendingPurchases > 0 ? `${discipline.pendingPurchases} purchase${discipline.pendingPurchases === 1 ? "" : "s"} need attention` : "View history"}</span></summary><div className="secondary-content"><section className="history-block"><h2>Saved rules</h2>{rules.length ? rules.map((rule) => <div className="history-row" key={rule.id}><span>{rule.name} ({rule.status})</span><span>{rule.solToKeepLamports === null ? "Set SOL to keep" : `${formatAtomic(BigInt(rule.solToKeepLamports), 9)} SOL to keep`} · {rule.spyxBps}% SPYx / {rule.jupBps}% JUP</span><div><button className="link-button" onClick={() => selectRule(rule)}>Load</button><button className="link-button" onClick={() => toggleRule(rule)}>{rule.status === "active" ? "Pause" : "Activate"}</button><button className="link-button" onClick={() => duplicateRule(rule)}>Duplicate</button><button className="link-button destructive" onClick={() => { deleteRule(rule.id); setRules(loadRules()); if (selectedRuleId === rule.id) setSelectedRuleId(null); }}>Delete</button></div></div>) : <p>No saved rules yet.</p>}</section><section className="history-block"><h2>Recent operations</h2>{history.length ? history.map((item) => <div className="history-row" key={item.id}><span>{item.rule.name}</span><span>{item.saleStatus}</span><span>{item.actualProceeds ? `${formatAtomic(BigInt(item.actualProceeds), 6, 4)} USDC` : "Awaiting proceeds"}</span>{item.saleStatus === "finalized" && <button className="link-button" onClick={() => { setOperation(item); setMode(item.wallet === "fixture" ? "fixture" : "live"); setMessage(`${item.rule.name} restored. Continue any ready or pending purchase.`); }}>Resume</button>}</div>) : <p>No operations yet.</p>}</section></div></details>
       <p className="workspace-message" role="status">{message}</p>
       <footer className="workspace-footer">Banked never requests seed phrases, delegated authority, or custody transfers.</footer>
     </main>
   </div>;
 }
 
-function AllocationControl({ id, value, onChange }: { id: PurchaseDestinationId; value: number; onChange: (id: PurchaseDestinationId, value: number) => void }) {
+function AllocationControl({ id, value, onChange, disabled = false }: { id: PurchaseDestinationId; value: number; onChange: (id: PurchaseDestinationId, value: number) => void; disabled?: boolean }) {
   const asset = getPurchaseAsset(id);
-  return <div className="workspace-field"><div><span>Allocate to {asset.symbol}</span><output>{value}%</output></div><input id={`${id}-allocation`} type="range" min="0" max="100" value={value} aria-label={`Allocate to ${asset.symbol}`} onChange={(event) => onChange(id, Number(event.target.value))} /><small>{asset.kind === "xstock" ? "xStock economic exposure, not direct share ownership." : "Curated Solana token destination."}</small></div>;
+  return <div className="workspace-field"><div><span>Allocate to {asset.symbol}</span><output>{value}%</output></div><input id={`${id}-allocation`} type="range" min="0" max="100" value={value} disabled={disabled} aria-label={`Allocate to ${asset.symbol}`} onChange={(event) => onChange(id, Number(event.target.value))} /><small>{asset.kind === "xstock" ? "xStock economic exposure, not direct share ownership." : "Curated Solana token destination."}</small></div>;
 }
 
 function AllocationLine({ label, amount, note }: { label: string; amount: bigint; note: string }) {
@@ -356,8 +452,17 @@ function Step({ number, label, active }: { number: string; label: string; active
   return <li className={active ? "complete" : ""}><span>{active ? <StatusMark /> : number}</span>{label}</li>;
 }
 
-function WorkspaceMetric({ label, value }: { label: string; value: string }) {
-  return <div><span>{label}</span><strong>{value}</strong></div>;
+function MoneyDashboard({ summary, mode }: { summary: MoneyFlowSummary; mode: "fixture" | "live" }) {
+  return <section className="money-dashboard" id="dashboard" aria-labelledby="money-dashboard-heading">
+    <div className="section-heading"><div><p className="section-kicker">YOUR ROUTING DASHBOARD</p><h2 id="money-dashboard-heading">Where the exit went</h2></div><span className="plain-status">{mode === "fixture" ? "Simulation receipts" : "Connected wallet receipts"}</span></div>
+    <div className="money-dashboard-body"><div className="money-proceeds"><span>Total recorded proceeds</span><strong>{formatAtomic(summary.proceeds, 6, 6)} <small>USDC</small></strong><p>{summary.completedExits} finalized exit{summary.completedExits === 1 ? "" : "s"}{summary.exitsNeedingAction > 0 ? ` · ${summary.exitsNeedingAction} need action` : ""}</p></div><div className="money-flow-grid"><DashboardValue label="Routed to SPYx" value={summary.routedSpyx} /><DashboardValue label="Routed to JUP" value={summary.routedJup} /><DashboardValue label="Awaiting purchase" value={summary.awaitingAction} /><DashboardValue label="Planned to keep" value={summary.plannedRetained} /></div></div>
+    {summary.unverified > 0n && <p className="money-dashboard-alert">{formatAtomic(summary.unverified, 6, 6)} USDC of older completed purchase budgets have no recorded debit. Check their receipts before treating them as routed.</p>}
+    <p className="money-dashboard-note">{summary.completedExits === 0 ? "Record an exit to see how its proceeds are routed. This view uses saved receipts, not your current wallet balance." : "Routed amounts use recorded purchase debits. Planned retention is an allocation, not a live wallet balance."}</p>
+  </section>;
+}
+
+function DashboardValue({ label, value }: { label: string; value: bigint }) {
+  return <div><span>{label}</span><strong>{formatAtomic(value, 6, 6)} <small>USDC</small></strong></div>;
 }
 
 function PurchaseCard({ destinationId, operation, quote, mode, onQuote, onFixture, onPrepare, onSign, onRecover, prepared }: { destinationId: PurchaseDestinationId; operation: RuleOperation; quote?: Quote; mode: "fixture" | "live"; onQuote: (id: PurchaseDestinationId) => void; onFixture: (id: PurchaseDestinationId) => void; onPrepare: (id: PurchaseDestinationId) => void; onSign: (id: PurchaseDestinationId) => void; onRecover: (id: PurchaseDestinationId) => void; prepared: boolean }) {
@@ -389,5 +494,5 @@ function bytesToBase64(value: Uint8Array): string {
 }
 
 declare global {
-  interface Window { phantom?: { solana?: { isPhantom?: boolean; connect: () => Promise<{ publicKey: { toBase58: () => string } }>; signTransaction: (transaction: VersionedTransaction) => Promise<VersionedTransaction> } } }
+  interface Window { phantom?: { solana?: { isPhantom?: boolean; connect: () => Promise<{ publicKey: { toBase58: () => string } }>; signTransaction: (transaction: VersionedTransaction) => Promise<VersionedTransaction>; signAndSendTransaction?: (transaction: Transaction | VersionedTransaction) => Promise<{ signature: string }> } } }
 }

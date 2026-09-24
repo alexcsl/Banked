@@ -8,6 +8,7 @@ type TransactionForDetection = {
   blockTime?: number | null;
   meta: {
     err: unknown;
+    fee?: number;
     preBalances: number[];
     postBalances: number[];
     preTokenBalances?: TokenBalance[] | null;
@@ -45,12 +46,14 @@ export function detectSolToUsdcExit(transaction: TransactionForDetection, wallet
   if (walletIndex < 0) return null;
   const solDelta = BigInt(transaction.meta.postBalances[walletIndex] ?? 0) - BigInt(transaction.meta.preBalances[walletIndex] ?? 0);
   const usdcDelta = tokenDelta(transaction.meta, wallet, USDC_MINT);
-  if (solDelta >= 0n || usdcDelta <= 0n) return null;
+  const fee = walletIndex === 0 ? BigInt(transaction.meta.fee ?? 0) : 0n;
+  const solDebited = -solDelta - fee;
+  if (solDebited <= 0n || usdcDelta <= 0n) return null;
   return {
     signature,
     slot: transaction.slot,
     blockTime: transaction.blockTime ?? null,
-    solDebited: (-solDelta).toString(),
+    solDebited: solDebited.toString(),
     usdcReceived: usdcDelta.toString(),
   };
 }

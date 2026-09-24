@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { VersionedTransaction } from "@solana/web3.js";
+import { Transaction, VersionedTransaction } from "@solana/web3.js";
 import { allocateProceeds, formatAtomic, hasEconomicEquityBudget, parseDecimalToAtomic } from "@/domain/allocation";
 import { transitionOperation, type BankedOperation } from "@/domain/operation";
 import { saveOperation } from "@/storage/operations";
@@ -252,7 +252,7 @@ export function BankedFlow() {
 }
 
 declare global {
-  interface Window { phantom?: { solana?: { isPhantom?: boolean; connect: () => Promise<{ publicKey: { toBase58: () => string } }>; signTransaction: (transaction: VersionedTransaction) => Promise<VersionedTransaction> } } }
+  interface Window { phantom?: { solana?: { isPhantom?: boolean; connect: () => Promise<{ publicKey: { toBase58: () => string } }>; signTransaction: (transaction: VersionedTransaction) => Promise<VersionedTransaction>; signAndSendTransaction?: (transaction: Transaction | VersionedTransaction) => Promise<{ signature: string }> } } }
 }
 
 function base64ToBytes(value: string): Uint8Array {

@@ -1,0 +1,84 @@
+BANKED DEMO WALKTHROUGH
+Recommended recording: simulation mode, about 2 to 3 minutes. This is a separate recording from the slide pitch. Lines marked SAY are spoken; ACTION lines are clicks and camera cues.
+
+BEFORE YOU RECORD
+
+1. Open Chrome with the Banked site. Phantom is needed only for the wallet-connection scene; it is not needed to run the simulation. Use a disposable wallet for filming and keep seed phrases, private keys, and full account details off screen.
+2. From D:\Hackathon\BankedStocklana, run npm.cmd install if dependencies are missing. Then start the local app with: npm.cmd run dev -- --port 3100
+3. Open http://localhost:3100 in Chrome. If another server is already running, use the URL printed by its terminal. The normal project default is http://localhost:3000 when no port is specified.
+4. Leave NEXT_PUBLIC_BANKED_MODE=fixture and BANKED_LIVE_ENABLED=false for the recording. The page should say "Simulation mode" at the top.
+5. For the clean 125.030864 USDC dashboard totals shown below, use a separate Chrome profile. If the wallet scene is part of the take, set up Phantom in that profile before recording. Banked saves rules and receipts in browser local storage, so old demo operations add to the dashboard totals. Do not delete existing browser data just to prepare the video. If you use an existing profile, explain that the dashboard totals include earlier receipts.
+6. Set browser zoom so the header, dashboard, and rule editor are legible. Rehearse scrolling from the rule editor to the destination cards and back to the dashboard.
+
+SCENE 1 - OPEN THE PRODUCT
+
+ACTION: Start the screen recording. Show the top of the page, including "Keep your trading capital. Route the excess." and the "Simulation mode" label. Scroll briefly to "Where the exit went".
+SAY: "Banked lets me decide how much SOL I want left to trade. It only proposes selling the amount above that balance, then shows where the proceeds went. This recording uses simulation mode, so no SOL or USDC will move."
+EXPECTED: In a fresh browser profile, the dashboard starts at zero and says it uses saved receipts rather than the current wallet balance.
+
+SCENE 2 - CONNECT A WALLET, IF PHANTOM IS READY
+
+ACTION: Click "Connect wallet" in the top right. In the Phantom popup, approve the site connection. Return to Banked and point to the shortened wallet address in the header. Do not show the seed phrase or a full wallet screen.
+SAY: "I can connect Phantom so Banked knows which wallet I am using. Connecting gives the site my public address. It does not sign a transaction, give Banked control of funds, or make every wallet trade follow a rule."
+EXPECTED: The header changes from "Connect wallet" to a shortened address. If Phantom is missing, Banked shows "Phantom is required for live execution. Fixture mode remains available." Continue the simulation without wallet connection.
+IMPORTANT: The simulation operation is stored under a fixture identity, even when Phantom is connected. The simulation is not attached to the connected wallet. After refreshing, you may need to reconnect Phantom to show the address again.
+
+SCENE 3 - DEFINE THE RULE
+
+ACTION: Click "Exit rule". Leave "SOL to keep" at 10, then change "Wallet SOL balance (simulation)" from 11 to 9. Point out that excess is 0 and the sale action is unavailable. Change the wallet balance to 11. Keep SPYx at 20 percent and JUP at 20 percent. Click "Save rule". Show that it is paused, then click "Activate rule".
+SAY: "My rule keeps 10 SOL in my wallet. If the wallet has 9, Banked sells nothing. If it has 11, only the extra 1 SOL is eligible. I save the split, and I decide when to activate it."
+EXPECTED: At a 9 SOL wallet balance, the estimate is zero. At 11 SOL, the panel estimates 125.030864 USDC, 25.006172 for SPYx, 25.006172 for JUP, and 75.01852 retained. These numbers use a fixed simulation rate. A saved or activated rule alone does not move money.
+
+SCENE 4 - RECORD THE SIMULATED SALE
+
+ACTION: In the allocation panel, click "Record simulation proceeds" once. Pause so viewers can see the step status change. Scroll to the dashboard and then to "Finish eligible destinations".
+SAY: "I am recording a simulated sale of only the 1 SOL above my trading balance. Banked creates two separate purchase budgets. Nothing was sold from Phantom."
+EXPECTED: The dashboard shows 125.030864 USDC total recorded proceeds, 50.012344 USDC awaiting purchase, and 75.01852 USDC planned to keep. SPYx and JUP each show a 25.006172 USDC budget with status "ready". The retained USDC is a plan, not a live wallet balance.
+
+SCENE 5 - COMPLETE ONLY SPYx
+
+ACTION: In the SPYx card, click "Record simulation purchase" once. Do not click the JUP purchase button yet. Scroll back to the dashboard.
+SAY: "I complete only SPYx. That is the point of the dashboard: one part of the plan is done, but the JUP step is still waiting."
+EXPECTED: SPYx shows "finalized". The dashboard shows 25.006172 USDC routed to SPYx, 0 routed to JUP, 25.006172 awaiting purchase, and 75.01852 planned to keep. "Get quote" is optional and may depend on external API access; it is not needed for this simulation recording.
+
+SCENE 6 - SHOW THAT THE UNFINISHED STEP SURVIVES REFRESH
+
+ACTION: Refresh the page. Go to "History" in the top navigation, or expand "Saved rules and receipts" near the bottom. Under "Recent operations", find the operation just recorded and click "Resume". Scroll back to the destination cards.
+SAY: "If I leave and come back, the receipt remains in this browser. I can resume the same operation. SPYx is still completed, and JUP is still waiting."
+EXPECTED: The app reloads saved receipts from local storage. The active operation may need the "Resume" click before its destination cards reappear. The Phantom connection indicator may revert to "Connect wallet" after refresh; that does not affect the fixture simulation.
+
+SCENE 7 - FINISH JUP AND SHOW THE RECEIPT
+
+ACTION: In the JUP card, click "Record simulation purchase". Scroll to the dashboard, then show the "Rule receipt" section. Optionally click "Copy receipt" or "Download JSON".
+SAY: "Now JUP is complete too. The dashboard shows both routed amounts and the USDC I planned to keep. The receipt records the rule and what happened at each step."
+EXPECTED: Routed to SPYx is 25.006172 USDC; routed to JUP is 25.006172 USDC; awaiting purchase is 0; planned to keep is 75.01852 USDC. These are simulation records, not on-chain purchases or a wallet balance.
+
+OPTIONAL SCENE - EXTERNAL WALLET SALE
+
+ACTION: If you want to explain a sale made outside Banked, reconnect Phantom if needed. In the rule editor, point to "Scan wallet" under "Apply this rule to a completed exit". You may click it, but a clean demo wallet may return no candidates.
+SAY: "If I sold SOL in another app, Banked does not automatically execute this rule. I would scan for a recent finalized SOL-to-USDC exit, review a candidate, and press 'Apply rule' myself. That imports a receipt after the fact; it does not prove I set the rule before selling or send a transaction."
+EXPECTED: The scan may show candidates or say none were found. Do not depend on finding one during the recorded demo.
+
+LIVE MODE: WHAT TO SHOW TODAY
+
+ACTION: If the video needs a live-mode mention, click "Use live mode" in the header. Point to "Mainnet execution" and "Prepare live sale". Do not claim that toggling this switch enables trading. Return to "Use simulation" before continuing the recorded walkthrough.
+SAY: "The interface also shows the intended live path. It checks the connected wallet balance, calculates only the amount above my target, and asks me to sign the sale. It does not automatically sell incoming SOL. That path is gated today while transaction inspection, reconciliation, provider access, and eligibility are validated. This video demonstrates the working simulation."
+EXPECTED: With the default server settings, pressing "Prepare live sale" returns "Live order preparation is disabled." The UI switch alone cannot enable the backend.
+
+CONTROLLED LIVE TEST, ONLY AFTER THE RELEASE GATES ARE COMPLETE
+
+1. Use the live-readiness runbook in docs/live-readiness.md. A permitted account, a disposable funded wallet, Jupiter API access, a reliable RPC, complete transaction inspection, signed-order binding, and jurisdiction checks are required first.
+2. With the live backend deliberately enabled for a controlled test, connect Phantom, choose a rule and SOL amount, and click "Prepare live sale". Review the prepared transaction before any wallet signature.
+3. Click "Review and sign sale" only after the transaction is understood. Phantom must request approval. Banked cannot sign for the wallet.
+4. Wait for the sale's finalized USDC change to be reconciled. If status becomes "reconciliation-required", inspect the chain result before any retry. Do not create a replacement sale while status is uncertain.
+5. For each eligible destination, click "Prepare purchase", review the separate transaction, then "Review and sign" in Phantom. Repeat for the other destination only if intended. If a purchase is pending, use "Reconcile purchase" before trying again.
+6. Show the wallet-specific receipt and dashboard only after on-chain confirmation. The dashboard still summarizes saved operations, not the wallet's full balance.
+7. This controlled live path has not been proven with a real browser wallet in the current MVP. It is not the recommended hackathon video take.
+
+IF SOMETHING LOOKS DIFFERENT
+
+- If the dashboard has larger totals, earlier local receipts are included. Show the active operation or use a separate clean Chrome profile for a new take.
+- If Phantom does not open, use simulation without wallet connection. The simulation does not require it.
+- If SPYx or JUP is "skipped", the allocation may be below the 10 USDC minimum. Restore 1 SOL and 20/20 percentages.
+- If the destination cards are missing after refresh, open "Saved rules and receipts" and click "Resume" on the recent finalized operation.
+- If live preparation is disabled, that is the expected safety gate. Switch back to simulation for the video.

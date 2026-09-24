@@ -1,6 +1,5 @@
 node_modules/
 .next/
-target/
 *.tsbuildinfo
 playwright-report/
 test-results/

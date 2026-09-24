@@ -1,4 +1,4 @@
-import { allocateRuleProceeds, type RulePercentages } from "@/domain/allocation";
+import { allocateRuleProceeds, parseDecimalToAtomic, type RulePercentages } from "@/domain/allocation";
 import { type PurchaseDestinationId } from "@/domain/assets";
 
 export type ExitRule = RulePercentages & {
@@ -6,6 +6,8 @@ export type ExitRule = RulePercentages & {
   name: string;
   createdAt: string;
   updatedAt: string;
+  solToKeepLamports: string | null;
+  status: "paused" | "active";
 };
 
 export type PurchaseStatus = "ready" | "prepared" | "submitted" | "finalized" | "pending" | "skipped";
@@ -17,6 +19,7 @@ export type DestinationPurchase = {
   signature?: string;
   expectedOutput?: string;
   actualOutput?: string;
+  usdcSpent?: string;
 };
 
 export type RuleOperation = {
@@ -45,12 +48,30 @@ export type ExitDisciplineSummary = {
   retainedUsdc: bigint;
 };
 
-export function createExitRule(name: string, percentages: RulePercentages, now = new Date().toISOString()): ExitRule {
+export type MoneyFlowSummary = {
+  proceeds: bigint;
+  routedSpyx: bigint;
+  routedJup: bigint;
+  awaitingAction: bigint;
+  unverified: bigint;
+  plannedRetained: bigint;
+  completedExits: number;
+  exitsNeedingAction: number;
+};
+
+export function calculateExcessSol(balanceLamports: bigint, keepLamports: bigint): bigint {
+  if (balanceLamports < 0n || keepLamports < 0n) throw new Error("SOL balances cannot be negative.");
+  const minimumBalance = keepLamports > 5_000_000n ? keepLamports : 5_000_000n;
+  return balanceLamports > minimumBalance ? balanceLamports - minimumBalance : 0n;
+}
+
+export function createExitRule(name: string, percentages: RulePercentages, now = new Date().toISOString(), solToKeep?: string): ExitRule {
   const trimmedName = name.trim();
   if (!trimmedName) throw new Error("Enter a name for this exit rule.");
   if (trimmedName.length > 60) throw new Error("Rule names must be 60 characters or fewer.");
   allocateRuleProceeds(0n, percentages);
-  return { id: crypto.randomUUID(), name: trimmedName, ...percentages, createdAt: now, updatedAt: now };
+  const solToKeepLamports = solToKeep === undefined ? null : parseDecimalToAtomic(solToKeep, 9).toString();
+  return { id: crypto.randomUUID(), name: trimmedName, ...percentages, createdAt: now, updatedAt: now, solToKeepLamports, status: "paused" };
 }
 
 export function createRuleOperation(rule: ExitRule, wallet: string, saleStatus: RuleOperation["saleStatus"] = "prepared"): RuleOperation {
@@ -93,4 +114,33 @@ export function summarizeRuleOperations(operations: RuleOperation[]): ExitDiscip
       retainedUsdc: summary.retainedUsdc + allocation.retainedUsdc,
     };
   }, { totalRules: 0, completedRules: 0, pendingPurchases: 0, retainedUsdc: 0n });
+}
+
+export function summarizeMoneyFlow(operations: RuleOperation[]): MoneyFlowSummary {
+  return operations.reduce<MoneyFlowSummary>((summary, operation) => {
+    if (operation.saleStatus !== "finalized" || !operation.actualProceeds) return summary;
+    const proceeds = BigInt(operation.actualProceeds);
+    const allocation = allocateRuleProceeds(proceeds, { spyxBps: operation.rule.spyxBps, jupBps: operation.rule.jupBps });
+    const routed = (destinationId: PurchaseDestinationId) => {
+      const purchase = operation.purchases[destinationId];
+      if (purchase.status !== "finalized") return 0n;
+      return purchase.usdcSpent === undefined ? 0n : BigInt(purchase.usdcSpent);
+    };
+    const routedSpyx = routed("spyx");
+    const routedJup = routed("jup");
+    const purchases = Object.values(operation.purchases);
+    const needsAction = purchases.some((purchase) => !["finalized", "skipped"].includes(purchase.status));
+    const awaitingAction = purchases.reduce((total, purchase) => total + (!["finalized", "skipped"].includes(purchase.status) ? BigInt(purchase.budget) : 0n), 0n);
+    const unverified = purchases.reduce((total, purchase) => total + (purchase.status === "finalized" && purchase.usdcSpent === undefined ? BigInt(purchase.budget) : 0n), 0n);
+    return {
+      proceeds: summary.proceeds + proceeds,
+      routedSpyx: summary.routedSpyx + routedSpyx,
+      routedJup: summary.routedJup + routedJup,
+      awaitingAction: summary.awaitingAction + awaitingAction,
+      unverified: summary.unverified + unverified,
+      plannedRetained: summary.plannedRetained + allocation.retainedUsdc,
+      completedExits: summary.completedExits + 1,
+      exitsNeedingAction: summary.exitsNeedingAction + Number(needsAction),
+    };
+  }, { proceeds: 0n, routedSpyx: 0n, routedJup: 0n, awaitingAction: 0n, unverified: 0n, plannedRetained: 0n, completedExits: 0, exitsNeedingAction: 0 });
 }
